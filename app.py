@@ -537,7 +537,7 @@ st.divider()
 st.subheader("종목별 매수 · 보류 · 매도 판단")
 st.caption(
     "⚠️ 투자 조언이 아니라 아래 규칙에 따른 단순 계산 결과입니다. "
-    "매수 고려: 실시간가 ≤ 120일 이평선 · 보류: 평단가 대비 ±5~10% · 매도 고려: 평단가 대비 -20% 이하"
+    "매수 고려: 실시간가 ≤ 120일 이평선 · 매도 고려: 평단가 대비 -20% 이하 · 그 외 전부: 보류"
 )
 
 if tickers:
@@ -581,7 +581,6 @@ if tickers:
                         "매수 고려": "color:#34d8b0;font-weight:600;",
                         "매도 고려": "color:#ff6b6b;font-weight:600;",
                         "보류": "color:#d4af37;font-weight:600;",
-                        "관망": "color:#8a94a6;",
                     }
                     style = colors.get(row["판단"], "")
                     return ["" if col != "판단" else style for col in row.index]
