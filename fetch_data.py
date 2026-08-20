@@ -31,10 +31,21 @@ def get_client(service_account_info: dict) -> gspread.Client:
 
 def _all_values_first_sheet(gc: gspread.Client, sheet_id: str) -> list[list[str]]:
     sh = gc.open_by_key(sheet_id)
-    ws = sh.get_worksheet(0)  # 첫 번째 탭. 탭이 여러 개면 아래 주석 참고.
-    # 탭이 여러 개인 문서라면 이렇게 이름으로 지정하세요:
-    # ws = sh.worksheet("탭이름")
+    ws = sh.get_worksheet(0)  # 첫 번째 탭만 사용 (자산현황, 주식 시트는 탭이 1개라 이걸로 충분)
     return ws.get_all_values()
+
+
+def _all_worksheets_values(gc: gspread.Client, sheet_id: str) -> list[tuple[str, list[list[str]]]]:
+    """스프레드시트 안의 '모든' 탭을 각각 (탭이름, 값들) 형태로 반환.
+    가계부처럼 탭이 월별로 나뉘어 있는 문서에 사용."""
+    sh = gc.open_by_key(sheet_id)
+    result = []
+    for ws in sh.worksheets():
+        try:
+            result.append((ws.title, ws.get_all_values()))
+        except Exception:
+            continue
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -90,46 +101,60 @@ def fetch_stock_summary(gc: gspread.Client, debug: bool = False) -> dict:
 # 3) 가계부 시트 (연도별로 월 블록이 반복되는 구조: '시작일' 라벨마다 총수입/총지출/총저축)
 # ---------------------------------------------------------------------------
 def fetch_ledger_monthly(gc: gspread.Client, year: int = 2026, debug: bool = False) -> list[dict]:
-    values = _all_values_first_sheet(gc, SHEET_IDS["ledger"])
-
-    start_markers = []
-    for r, row in enumerate(values):
-        if any((cell or "").strip() == "시작일" for cell in row):
-            start_markers.append(r)
+    # 가계부는 탭이 월별로 나뉘어 있을 수 있어서, 모든 탭을 다 훑습니다.
+    worksheets = _all_worksheets_values(gc, SHEET_IDS["ledger"])
+    if debug:
+        print(f"[ledger] 총 {len(worksheets)}개 탭 발견:", [name for name, _ in worksheets])
 
     months = []
-    for r in start_markers:
-        date_str = find_date_in_row(values[r])
-        if not date_str or str(year) not in date_str:
-            continue
+    seen_dates = set()
 
-        window = values[r : r + 10]
+    for tab_name, values in worksheets:
+        start_markers = []
+        for r, row in enumerate(values):
+            if any((cell or "").strip() == "시작일" for cell in row):
+                start_markers.append(r)
 
-        def find_in_window(label):
-            for wr, wrow in enumerate(window):
-                for wc, cell in enumerate(wrow):
-                    if cell and str(cell).strip() == label:
-                        if wc + 1 < len(wrow):
-                            return wrow[wc + 1]
-            return None
+        for r in start_markers:
+            date_str = find_date_in_row(values[r])
+            if not date_str or str(year) not in date_str:
+                continue
+            if date_str in seen_dates:  # 같은 월이 여러 탭에 중복되지 않게
+                continue
 
-        income = to_number(find_in_window("총 수입"))
-        expense = to_number(find_in_window("총 지출"))
-        saving = to_number(find_in_window("총 저축"))
+            window = values[r : r + 10]
 
-        months.append(
-            {
-                "date": date_str,
-                "income": income,
-                "expense": expense,
-                "saving": saving,
-            }
-        )
+            def find_in_window(label):
+                for wrow in window:
+                    for wc, cell in enumerate(wrow):
+                        if cell and str(cell).strip() == label:
+                            if wc + 1 < len(wrow):
+                                return wrow[wc + 1]
+                return None
+
+            income = to_number(find_in_window("총 수입"))
+            expense = to_number(find_in_window("총 지출"))
+            saving = to_number(find_in_window("총 저축"))
+
+            seen_dates.add(date_str)
+            months.append(
+                {
+                    "date": date_str,
+                    "tab": tab_name,
+                    "income": income,
+                    "expense": expense,
+                    "saving": saving,
+                }
+            )
+
+    months.sort(key=lambda m: m["date"])
 
     if debug:
         print("[ledger_monthly]")
         for m in months:
             print("  ", m)
+        if not months:
+            print("  -> 아무 달도 못 찾았습니다. 탭 이름/'시작일' 라벨이 실제 시트와 맞는지 확인하세요.")
     return months
 
 
