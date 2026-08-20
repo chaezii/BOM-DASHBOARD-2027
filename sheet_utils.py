@@ -104,3 +104,85 @@ def find_table_total(
                 for col, pos in col_positions.items()
             }
     return {}
+
+
+def parse_asset_detail_items(
+    values: list[list[str]],
+    total_label: str = "자산",
+) -> dict:
+    """
+    자산현황 시트 맨 위쪽, '항목명 | 금액' 형태로 나열된 개별 자산 라인들을
+    {항목명: 금액} 딕셔너리로 반환. total_label(기본 '자산') 행을 만나면 멈춤.
+    """
+    total_matches = grid_find_all(values, total_label)
+    if not total_matches:
+        return {}
+    total_row = total_matches[0][0]
+
+    items = {}
+    for r in range(0, total_row):
+        row = values[r]
+        if not row:
+            continue
+        name = (row[0] or "").strip()
+        if not name or name in ("항목", "합계"):
+            continue
+        # 이름 옆 칸들 중 숫자로 해석되는 첫 값을 금액으로 사용
+        value = None
+        for c in range(1, min(len(row), 4)):
+            v = to_number(row[c])
+            if v:
+                value = v
+                break
+        if value is not None:
+            items[name] = value
+    return items
+
+
+def parse_ticker_tables(
+    values: list[list[str]],
+    required_headers: tuple[str, ...] = ("종목명", "종목코드"),
+    section_labels: tuple[str, ...] = ("국내 주식 포트폴리오", "미국 주식 포트폴리오"),
+) -> list[dict]:
+    """
+    시트 안에서 '종목명 / 종목코드' 등이 같이 있는 헤더 행을 전부 찾아서
+    각 표를 [{market, columns:{...}}, ...] 형태로 파싱.
+    market은 가장 가까운 위쪽의 section_labels 문구로 추정.
+    """
+    tables = []
+    n_rows = len(values)
+    for r, row in enumerate(values):
+        cells = [(c or "").strip() for c in row]
+        if all(h in cells for h in required_headers):
+            col_positions = {}
+            for c, cell in enumerate(cells):
+                if cell:
+                    col_positions[cell] = c
+
+            # 가장 가까운 위쪽 섹션 라벨 찾기 (시장 구분용)
+            market = "기타"
+            for back in range(r - 1, max(r - 40, -1), -1):
+                back_cells = [(c or "").strip() for c in values[back]]
+                for label in section_labels:
+                    if any(label in c for c in back_cells):
+                        market = label.replace(" 주식 포트폴리오", "")
+                        break
+                if market != "기타":
+                    break
+
+            data_rows = []
+            for dr in range(r + 1, n_rows):
+                drow = values[dr]
+                name_cell = drow[col_positions["종목명"]] if col_positions.get("종목명", -1) < len(drow) else ""
+                if not name_cell or not str(name_cell).strip():
+                    break
+                if str(name_cell).strip().startswith("*"):
+                    break
+                data_rows.append(
+                    {
+                        col: (drow[pos] if pos < len(drow) else None)
+                        for col, pos in col_positions.items()
+                    }
+                )
+            tables.append({"market": market, "header_row": r, "rows": data_rows})
+    return tables
