@@ -140,39 +140,43 @@ with c2:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# 자산 구성 + 주식 요약
+# 자산 구성
 # ---------------------------------------------------------------------------
-c3, c4 = st.columns(2)
-with c3:
-    st.subheader("자산 구성")
-    labels, values = [], []
-    for key, label in [
-        ("real_estate", "부동산"),
-        ("stocks", "주식"),
-        ("pension", "퇴직연금"),
-        ("cash", "현금"),
-        ("etc", "기타"),
-        ("crypto", "가상화폐"),
-    ]:
-        v = asset.get(key)
-        if v:
-            labels.append(label)
-            values.append(v)
-    fig = go.Figure(go.Pie(labels=labels, values=values, hole=0.6))
-    fig.update_layout(
-        height=320,
-        paper_bgcolor="#12171f",
-        font={"color": "#e8ecf1"},
-        margin=dict(l=10, r=10, t=10, b=10),
-    )
-    st.plotly_chart(fig, use_container_width=True)
+st.subheader("자산 구성")
+labels, values = [], []
+for key, label in [
+    ("real_estate", "부동산"),
+    ("stocks", "주식"),
+    ("pension", "퇴직연금"),
+    ("cash", "현금"),
+    ("etc", "기타"),
+    ("crypto", "가상화폐"),
+]:
+    v = asset.get(key)
+    if v:
+        labels.append(label)
+        values.append(v)
+fig = go.Figure(go.Pie(labels=labels, values=values, hole=0.6))
+fig.update_layout(
+    height=340,
+    paper_bgcolor="#12171f",
+    font={"color": "#e8ecf1"},
+    margin=dict(l=10, r=10, t=10, b=10),
+    legend=dict(orientation="h", y=-0.1),
+)
+st.plotly_chart(fig, use_container_width=True)
 
-with c4:
-    st.subheader("주식 포트폴리오 요약")
-    st.metric("총 매수금액", money(stock.get("total_buy")))
-    st.metric("총 평가금액", money(stock.get("total_eval")))
-    st.metric("평가손익", money(stock.get("total_profit")))
-    st.metric("수익률", f"{stock.get('total_return_pct') or 0:.1f}%")
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 주식 포트폴리오 요약 (한 줄)
+# ---------------------------------------------------------------------------
+st.subheader("주식 포트폴리오 요약")
+s1, s2, s3, s4 = st.columns(4)
+s1.metric("총 매수금액", money(stock.get("total_buy")))
+s2.metric("총 평가금액", money(stock.get("total_eval")))
+s3.metric("평가손익", money(stock.get("total_profit")))
+s4.metric("수익률", f"{stock.get('total_return_pct') or 0:.1f}%")
 
 st.divider()
 
@@ -277,9 +281,28 @@ if asset_items:
                 "증감": delta,
             }
         )
+
+    total_cur = sum(r["이번 달"] for r in rows)
+    total_prev_vals = [r["지난달"] for r in rows if r["지난달"] is not None]
+    total_prev = sum(total_prev_vals) if len(total_prev_vals) == len(rows) else None
+    total_delta = (total_cur - total_prev) if total_prev is not None else None
+    rows.append(
+        {
+            "항목": "합계",
+            "이번 달": total_cur,
+            "지난달": total_prev,
+            "증감": total_delta,
+        }
+    )
+
     df_assets = pd.DataFrame(rows)
+
+    def _highlight_total(row):
+        is_total = row["항목"] == "합계"
+        return ["font-weight: bold; border-top: 2px solid #8a94a6" if is_total else "" for _ in row]
+
     st.dataframe(
-        df_assets.style.format(
+        df_assets.style.apply(_highlight_total, axis=1).format(
             {"이번 달": "{:,.0f}원", "지난달": "{:,.0f}원", "증감": "{:+,.0f}원"},
             na_rep="—",
         ),
