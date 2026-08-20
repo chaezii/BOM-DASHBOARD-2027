@@ -304,6 +304,47 @@ else:
 st.divider()
 
 # ---------------------------------------------------------------------------
+# 소비관리 (카테고리별 월간 지출) - 자산현황 파일의 '소비관리' 탭
+# ---------------------------------------------------------------------------
+st.subheader("소비관리 · 카테고리별 지출")
+
+spending = data.get("spending") or {}
+sp_categories = spending.get("categories") or {}
+sp_months = spending.get("months") or []
+
+has_spending_data = sp_categories and any(sum(v) > 0 for v in sp_categories.values())
+
+if has_spending_data:
+    cat_colors = ["#5b9dff", "#34d8b0", "#d4af37", "#ff6b6b", "#a78bfa", "#f59e0b", "#8a94a6"]
+    fig = go.Figure()
+    for i, (cat_name, monthly_vals) in enumerate(sp_categories.items()):
+        fig.add_bar(
+            x=sp_months, y=monthly_vals, name=cat_name,
+            marker_color=cat_colors[i % len(cat_colors)],
+            hovertemplate=f"{cat_name} %{{y:,.0f}}원<extra></extra>",
+        )
+    fig.update_layout(
+        barmode="stack",
+        height=380,
+        paper_bgcolor="#12171f",
+        plot_bgcolor="#12171f",
+        font={"color": "#e8ecf1"},
+        legend=dict(orientation="h", y=1.15),
+        margin=dict(t=50, b=10),
+        yaxis=dict(gridcolor="#232b36", tickfont=dict(color="#8a94a6")),
+        xaxis=dict(gridcolor="#232b36"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Eat·Live·Wear·Enjoy·Edu·Ride·Other 카테고리별 지출을 월별로 쌓아서 보여줘요.")
+else:
+    st.info(
+        "소비관리 탭이 아직 비어있어요. 시트에 카테고리별 지출이 채워지면 "
+        "이 자리에 자동으로 그래프가 나타납니다 (코드 수정 필요 없음)."
+    )
+
+st.divider()
+
+# ---------------------------------------------------------------------------
 # 주식 포트폴리오 요약 (한 줄, 작은 글씨)
 # ---------------------------------------------------------------------------
 st.subheader("주식 포트폴리오 요약")
@@ -334,6 +375,35 @@ compact_metric_row(
         ("수익률", f"{stock.get('total_return_pct') or 0:.1f}%", "#34d8b0" if (stock.get('total_return_pct') or 0) >= 0 else "#ff6b6b"),
     ]
 )
+
+# --- 당월 / 3개월전 / 6개월전 추이 ---
+stock_trend = data.get("stock_trend") or {}
+if stock_trend:
+    st.markdown("<div style='font-size:12px;color:#8a94a6;margin-top:16px;'>기간별 추이</div>", unsafe_allow_html=True)
+    trend_rows = []
+    for key, label in [("6m_ago", "6개월 전"), ("3m_ago", "3개월 전"), ("current", "당월")]:
+        snap = stock_trend.get(key)
+        if not snap:
+            trend_rows.append({"기간": label, "실제 기준월": "—", "평가금액": None, "수익률": None})
+            continue
+        trend_rows.append(
+            {
+                "기간": label,
+                "실제 기준월": snap.get("period") or "—",
+                "평가금액": snap.get("total_eval"),
+                "수익률": snap.get("total_return_pct"),
+            }
+        )
+    df_trend = pd.DataFrame(trend_rows)
+    st.dataframe(
+        df_trend.style.format({"평가금액": "{:,.0f}원", "수익률": "{:.1f}%"}, na_rep="—"),
+        use_container_width=True,
+        hide_index=True,
+    )
+    if not history_sheet_id:
+        st.caption("3개월/6개월 전 값을 보려면 기록용 시트를 연결해야 해요 (README '기록용 시트 만들기' 참고).")
+    elif not stock_trend.get("3m_ago") and not stock_trend.get("6m_ago"):
+        st.caption("아직 3개월/6개월 치 기록이 쌓이지 않았어요. 계속 사용하시면 자동으로 채워집니다.")
 
 st.divider()
 
