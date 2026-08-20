@@ -140,149 +140,55 @@ with c2:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# 자산 구성
+# 자산 구성 (가로 막대 - 작은 항목도 겹치지 않고 잘 보이도록)
 # ---------------------------------------------------------------------------
 st.subheader("자산 구성")
-labels, values = [], []
-for key, label in [
-    ("real_estate", "부동산"),
-    ("stocks", "주식"),
-    ("pension", "퇴직연금"),
-    ("cash", "현금"),
-    ("etc", "기타"),
-    ("crypto", "가상화폐"),
+comp_items = []
+for key, label, color in [
+    ("real_estate", "부동산", "#5b9dff"),
+    ("stocks", "주식", "#34d8b0"),
+    ("pension", "퇴직연금", "#d4af37"),
+    ("cash", "현금", "#ff6b6b"),
+    ("etc", "기타", "#8a94a6"),
+    ("crypto", "가상화폐", "#a78bfa"),
 ]:
     v = asset.get(key)
     if v:
-        labels.append(label)
-        values.append(v)
-fig = go.Figure(
-    go.Pie(
-        labels=labels,
-        values=values,
-        hole=0.6,
-        textinfo="label+percent",
-        textfont=dict(color="#e8ecf1", size=12),
-        marker=dict(line=dict(color="#12171f", width=2)),
-    )
-)
-fig.update_layout(
-    height=340,
-    paper_bgcolor="#12171f",
-    font={"color": "#e8ecf1"},
-    margin=dict(l=10, r=10, t=10, b=10),
-    legend=dict(orientation="h", y=-0.1),
-)
-st.plotly_chart(fig, use_container_width=True)
+        comp_items.append((label, v, color))
 
-st.divider()
+if comp_items:
+    comp_items.sort(key=lambda x: x[1])  # 작은 값이 위, 큰 값이 아래로 (가로 막대 관례)
+    total_comp = sum(v for _, v, _ in comp_items)
+    labels = [c[0] for c in comp_items]
+    vals = [c[1] for c in comp_items]
+    colors = [c[2] for c in comp_items]
+    pct_text = [f"{v/total_comp*100:.1f}%  ({v:,.0f}원)" for v in vals]
 
-# ---------------------------------------------------------------------------
-# 주식 포트폴리오 요약 (한 줄, 작은 글씨)
-# ---------------------------------------------------------------------------
-st.subheader("주식 포트폴리오 요약")
-
-
-def compact_metric_row(items):
-    cols = st.columns(len(items))
-    for col, (label, value, color) in zip(cols, items):
-        col.markdown(
-            f"""
-            <div style="background:#161c26;border:1px solid #232b36;border-radius:10px;
-                        padding:10px 14px;">
-              <div style="font-size:11px;color:#8a94a6;margin-bottom:4px;">{label}</div>
-              <div style="font-size:17px;font-weight:600;color:{color};
-                          font-family:'IBM Plex Mono',monospace;">{value}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-_profit = stock.get("total_profit") or 0
-compact_metric_row(
-    [
-        ("총 매수금액", money(stock.get("total_buy")), "#e8ecf1"),
-        ("총 평가금액", money(stock.get("total_eval")), "#e8ecf1"),
-        ("평가손익", money(_profit), "#34d8b0" if _profit >= 0 else "#ff6b6b"),
-        ("수익률", f"{stock.get('total_return_pct') or 0:.1f}%", "#34d8b0" if (stock.get('total_return_pct') or 0) >= 0 else "#ff6b6b"),
-    ]
-)
-
-st.divider()
-
-# ---------------------------------------------------------------------------
-# 가계부 월별 추이
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# 가계부 · 수입/지출 흐름
-# ---------------------------------------------------------------------------
-st.subheader("가계부 · 수입 · 지출 흐름")
-if ledger:
-    months = [m["date"] for m in ledger]
-    income_vals = [m["income"] or 0 for m in ledger]
-    expense_vals = [m["expense"] or 0 for m in ledger]
-    expense_bars = [-e for e in expense_vals]  # 0 밑으로 내려가게 (지출은 아래로 흘러나가는 느낌)
-
-    cum_saving = []
-    running = 0
-    for inc, exp in zip(income_vals, expense_vals):
-        running += inc - exp
-        cum_saving.append(running)
-
-    fig = go.Figure()
-    fig.add_bar(
-        x=months, y=income_vals, name="수입",
-        marker_color="#34d8b0",
-        hovertemplate="수입 %{y:,.0f}원<extra></extra>",
-    )
-    fig.add_bar(
-        x=months, y=expense_bars, name="지출",
-        marker_color="#ff6b6b",
-        hovertemplate="지출 %{customdata:,.0f}원<extra></extra>",
-        customdata=expense_vals,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=months, y=cum_saving, name="누적 순저축",
-            mode="lines+markers",
-            line=dict(color="#d4af37", width=3),
-            marker=dict(size=6),
-            yaxis="y2",
-            hovertemplate="누적 순저축 %{y:,.0f}원<extra></extra>",
+    fig = go.Figure(
+        go.Bar(
+            x=vals,
+            y=labels,
+            orientation="h",
+            marker=dict(color=colors),
+            text=pct_text,
+            textposition="outside",
+            textfont=dict(color="#e8ecf1", size=13),
+            hovertemplate="%{y}: %{x:,.0f}원<extra></extra>",
         )
     )
     fig.update_layout(
-        barmode="relative",
-        height=380,
+        height=80 + 46 * len(labels),
         paper_bgcolor="#12171f",
         plot_bgcolor="#12171f",
         font={"color": "#e8ecf1"},
-        legend=dict(orientation="h", y=1.12),
-        margin=dict(t=40, b=10),
-        yaxis=dict(
-            title="월별 수입(위) · 지출(아래)",
-            zeroline=True, zerolinecolor="#8a94a6", zerolinewidth=1.5,
-            gridcolor="#232b36",
-        ),
-        yaxis2=dict(
-            title="누적 순저축",
-            overlaying="y", side="right",
-            showgrid=False,
-        ),
-        xaxis=dict(gridcolor="#232b36"),
+        margin=dict(l=10, r=90, t=10, b=10),
+        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        yaxis=dict(tickfont=dict(size=13)),
+        showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("초록 막대(수입)는 위로, 빨강 막대(지출)는 아래로 흘러요. 금색 선은 그 차이가 계속 쌓인 누적 순저축입니다.")
-
-    filled_income = [m for m in ledger if m["income"]]
-    if len(filled_income) < len(ledger) / 2:
-        st.warning(
-            "가계부에 수입이 입력된 달이 적어서(전체 중 일부만) 실제 저축여력을 "
-            "정확히 계산할 수 없습니다. 매달 수입을 입력하면 이 흐름이 더 정확해집니다."
-        )
 else:
-    st.info("가계부 데이터를 찾지 못했습니다. 디버그 모드를 켜고 fetch_data.py의 라벨 검색 로직을 확인하세요.")
+    st.info("자산 구성 데이터를 찾지 못했습니다.")
 
 st.divider()
 
@@ -344,6 +250,90 @@ if asset_items:
         st.caption("아직 지난달 기록이 없어서 증감이 비어있어요. 다음 달부터 채워집니다.")
 else:
     st.info("자산 상세 항목을 찾지 못했습니다. 디버그 모드를 켜고 로그를 확인해주세요.")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 가계부 · 수입 vs 지출 (단순 비교 막대)
+# ---------------------------------------------------------------------------
+st.subheader("가계부 · 수입 vs 지출")
+if ledger:
+    months = [m["date"] for m in ledger]
+    income_vals = [m["income"] or 0 for m in ledger]
+    expense_vals = [m["expense"] or 0 for m in ledger]
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=months, y=income_vals, name="수입",
+        marker_color="#34d8b0",
+        text=[f"{v:,.0f}" for v in income_vals],
+        textposition="outside",
+        textfont=dict(color="#e8ecf1", size=11),
+        hovertemplate="수입 %{y:,.0f}원<extra></extra>",
+    )
+    fig.add_bar(
+        x=months, y=expense_vals, name="지출",
+        marker_color="#ff6b6b",
+        text=[f"{v:,.0f}" for v in expense_vals],
+        textposition="outside",
+        textfont=dict(color="#e8ecf1", size=11),
+        hovertemplate="지출 %{y:,.0f}원<extra></extra>",
+    )
+    fig.update_layout(
+        barmode="group",
+        height=360,
+        paper_bgcolor="#12171f",
+        plot_bgcolor="#12171f",
+        font={"color": "#e8ecf1"},
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(t=40, b=10),
+        yaxis=dict(gridcolor="#232b36", tickfont=dict(color="#8a94a6")),
+        xaxis=dict(gridcolor="#232b36"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    filled_income = [m for m in ledger if m["income"]]
+    if len(filled_income) < len(ledger) / 2:
+        st.warning(
+            "가계부에 수입이 입력된 달이 적어서(전체 중 일부만) 실제 저축여력을 "
+            "정확히 계산할 수 없습니다. 매달 수입을 입력하면 이 비교가 더 정확해집니다."
+        )
+else:
+    st.info("가계부 데이터를 찾지 못했습니다. 디버그 모드를 켜고 fetch_data.py의 라벨 검색 로직을 확인하세요.")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 주식 포트폴리오 요약 (한 줄, 작은 글씨)
+# ---------------------------------------------------------------------------
+st.subheader("주식 포트폴리오 요약")
+
+
+def compact_metric_row(items):
+    cols = st.columns(len(items))
+    for col, (label, value, color) in zip(cols, items):
+        col.markdown(
+            f"""
+            <div style="background:#161c26;border:1px solid #232b36;border-radius:10px;
+                        padding:10px 14px;">
+              <div style="font-size:11px;color:#8a94a6;margin-bottom:4px;">{label}</div>
+              <div style="font-size:17px;font-weight:600;color:{color};
+                          font-family:'IBM Plex Mono',monospace;">{value}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+_profit = stock.get("total_profit") or 0
+compact_metric_row(
+    [
+        ("총 매수금액", money(stock.get("total_buy")), "#e8ecf1"),
+        ("총 평가금액", money(stock.get("total_eval")), "#e8ecf1"),
+        ("평가손익", money(_profit), "#34d8b0" if _profit >= 0 else "#ff6b6b"),
+        ("수익률", f"{stock.get('total_return_pct') or 0:.1f}%", "#34d8b0" if (stock.get('total_return_pct') or 0) >= 0 else "#ff6b6b"),
+    ]
+)
 
 st.divider()
 
