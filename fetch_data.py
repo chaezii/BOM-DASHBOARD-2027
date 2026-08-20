@@ -29,10 +29,15 @@ def get_client(service_account_info: dict) -> gspread.Client:
     return gspread.authorize(creds)
 
 
-def _all_values_first_sheet(gc: gspread.Client, sheet_id: str) -> list[list[str]]:
-    sh = gc.open_by_key(sheet_id)
-    ws = sh.get_worksheet(0)  # 첫 번째 탭만 사용 (자산현황, 주식 시트는 탭이 1개라 이걸로 충분)
-    return ws.get_all_values()
+def _find_worksheet_containing(worksheets: list[tuple[str, list]], label: str):
+    """label이라는 글자가 들어있는 첫 번째 탭을 찾아서 (탭이름, 값들)을 반환.
+    못 찾으면 (None, None)."""
+    for name, values in worksheets:
+        for row in values:
+            for cell in row:
+                if cell and str(cell).strip() == label:
+                    return name, values
+    return None, None
 
 
 def _all_worksheets_values(gc: gspread.Client, sheet_id: str) -> list[tuple[str, list[list[str]]]]:
@@ -52,7 +57,17 @@ def _all_worksheets_values(gc: gspread.Client, sheet_id: str) -> list[tuple[str,
 # 1) 자산현황 시트
 # ---------------------------------------------------------------------------
 def fetch_asset_summary(gc: gspread.Client, debug: bool = False) -> dict:
-    values = _all_values_first_sheet(gc, SHEET_IDS["asset"])
+    worksheets = _all_worksheets_values(gc, SHEET_IDS["asset"])
+    if debug:
+        print(f"[asset] 총 {len(worksheets)}개 탭:", [n for n, _ in worksheets])
+
+    tab_name, values = _find_worksheet_containing(worksheets, "순자산")
+    if values is None:
+        if debug:
+            print("[asset] '순자산' 이라는 글자를 어느 탭에서도 못 찾았습니다.")
+        return {}
+    if debug:
+        print(f"[asset] '{tab_name}' 탭에서 데이터를 찾았습니다.")
 
     def val(label, occurrence=0):
         return to_number(grid_find(values, label, occurrence=occurrence))
@@ -77,7 +92,17 @@ def fetch_asset_summary(gc: gspread.Client, debug: bool = False) -> dict:
 # 2) 주식 포트폴리오 시트 (요약 표: 계좌명 / 매수금액 / 평가금액 / ... / 합계)
 # ---------------------------------------------------------------------------
 def fetch_stock_summary(gc: gspread.Client, debug: bool = False) -> dict:
-    values = _all_values_first_sheet(gc, SHEET_IDS["stock"])
+    worksheets = _all_worksheets_values(gc, SHEET_IDS["stock"])
+    if debug:
+        print(f"[stock] 총 {len(worksheets)}개 탭:", [n for n, _ in worksheets])
+
+    tab_name, values = _find_worksheet_containing(worksheets, "계좌명")
+    if values is None:
+        if debug:
+            print("[stock] '계좌명' 이라는 글자를 어느 탭에서도 못 찾았습니다.")
+        return {}
+    if debug:
+        print(f"[stock] '{tab_name}' 탭에서 데이터를 찾았습니다.")
 
     totals = find_table_total(
         values,
