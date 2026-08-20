@@ -366,40 +366,76 @@ def compact_metric_row(items):
         )
 
 
-_profit = stock.get("total_profit") or 0
+_buy = stock.get("total_buy")
+_eval = stock.get("total_eval")
+_profit = stock.get("total_profit")
+_return = stock.get("total_return_pct")
+
 compact_metric_row(
     [
-        ("총 매수금액", money(stock.get("total_buy")), "#e8ecf1"),
-        ("총 평가금액", money(stock.get("total_eval")), "#e8ecf1"),
-        ("평가손익", money(_profit), "#34d8b0" if _profit >= 0 else "#ff6b6b"),
-        ("수익률", f"{stock.get('total_return_pct') or 0:.1f}%", "#34d8b0" if (stock.get('total_return_pct') or 0) >= 0 else "#ff6b6b"),
+        ("총 매수금액", money(_buy), "#e8ecf1"),
+        ("총 평가금액", money(_eval), "#e8ecf1"),
+        ("평가손익", money(_profit), "#34d8b0" if (_profit or 0) >= 0 else "#ff6b6b"),
+        ("수익률", f"{_return:.1f}%" if _return is not None else "—", "#34d8b0" if (_return or 0) >= 0 else "#ff6b6b"),
     ]
 )
+if _buy is not None and _eval is None:
+    st.caption(
+        "⚠️ 평가금액/수익률이 비어있어요 — 실시간 시세 수식이 아직 값을 못 불러왔을 가능성이 높습니다. "
+        "잠시 후(1~2분 뒤) 새로고침해보세요."
+    )
 
-# --- 당월 / 3개월전 / 6개월전 추이 ---
+# --- 당월 / 3개월전 / 6개월전 추이 (차트) ---
 stock_trend = data.get("stock_trend") or {}
 if stock_trend:
-    st.markdown("<div style='font-size:12px;color:#8a94a6;margin-top:16px;'>기간별 추이</div>", unsafe_allow_html=True)
-    trend_rows = []
+    st.markdown("<div style='font-size:12px;color:#8a94a6;margin-top:18px;margin-bottom:6px;'>기간별 평가금액 추이</div>", unsafe_allow_html=True)
+
+    trend_points = []
     for key, label in [("6m_ago", "6개월 전"), ("3m_ago", "3개월 전"), ("current", "당월")]:
         snap = stock_trend.get(key)
-        if not snap:
-            trend_rows.append({"기간": label, "실제 기준월": "—", "평가금액": None, "수익률": None})
-            continue
-        trend_rows.append(
+        trend_points.append(
             {
-                "기간": label,
-                "실제 기준월": snap.get("period") or "—",
-                "평가금액": snap.get("total_eval"),
-                "수익률": snap.get("total_return_pct"),
+                "label": label,
+                "period": (snap or {}).get("period"),
+                "eval": (snap or {}).get("total_eval"),
+                "return_pct": (snap or {}).get("total_return_pct"),
             }
         )
-    df_trend = pd.DataFrame(trend_rows)
-    st.dataframe(
-        df_trend.style.format({"평가금액": "{:,.0f}원", "수익률": "{:.1f}%"}, na_rep="—"),
-        use_container_width=True,
-        hide_index=True,
+
+    x_labels = [p["label"] for p in trend_points]
+    y_vals = [p["eval"] if p["eval"] is not None else 0 for p in trend_points]
+    bar_colors = ["#5b9dff" if p["eval"] is not None else "#232b36" for p in trend_points]
+    text_labels = []
+    for p in trend_points:
+        if p["eval"] is None:
+            text_labels.append("데이터 없음")
+        else:
+            rp = f" ({p['return_pct']:.1f}%)" if p["return_pct"] is not None else ""
+            text_labels.append(f"{p['eval']:,.0f}원{rp}")
+
+    fig = go.Figure(
+        go.Bar(
+            x=x_labels,
+            y=y_vals,
+            marker_color=bar_colors,
+            text=text_labels,
+            textposition="outside",
+            textfont=dict(color="#e8ecf1", size=12),
+            hovertemplate="%{x}: %{text}<extra></extra>",
+        )
     )
+    fig.update_layout(
+        height=260,
+        paper_bgcolor="#12171f",
+        plot_bgcolor="#12171f",
+        font={"color": "#e8ecf1"},
+        margin=dict(t=30, b=10, l=10, r=10),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        xaxis=dict(tickfont=dict(size=13)),
+        showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
     if not history_sheet_id:
         st.caption("3개월/6개월 전 값을 보려면 기록용 시트를 연결해야 해요 (README '기록용 시트 만들기' 참고).")
     elif not stock_trend.get("3m_ago") and not stock_trend.get("6m_ago"):
