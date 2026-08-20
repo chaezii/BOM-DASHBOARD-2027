@@ -75,8 +75,7 @@ def classify_signal(avg_buy_price, current_price, ma120) -> str:
     """
     매수 고려 : 실시간가가 120일 이동평균선 이하로 떨어졌을 경우 (최우선)
     매도 고려 : 구매 평단가 대비 실시간가가 20% 이상 하락한 경우
-    보류      : 구매 평단가 대비 실시간가 변동폭이 ±5~10% 구간인 경우
-    관망      : 위 조건에 뚜렷하게 해당하지 않는 경우 (그 외 전부, 기본값)
+    보류      : 위 두 경우가 아닌 모든 경우 (기본값)
     """
     if avg_buy_price is None or current_price is None or avg_buy_price == 0:
         return "—"
@@ -88,6 +87,5 @@ def classify_signal(avg_buy_price, current_price, ma120) -> str:
 
     if pct <= -20:
         return "매도 고려"
-    if 5 <= abs(pct) <= 10:
-        return "보류"
-    return "관망"
+
+    return "보류"
