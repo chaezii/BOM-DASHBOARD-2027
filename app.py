@@ -472,6 +472,7 @@ if tickers:
                         "평가금액(이번달)": t["eval_amount"],
                         "평가금액(지난달)": prev_eval,
                         "증감": delta,
+                        "평가손익": t["profit"],
                         "수익률": t["return_pct"],
                     }
                 )
@@ -497,6 +498,7 @@ if tickers:
                         "평가금액(이번달)": total_cur,
                         "평가금액(지난달)": total_prev,
                         "증감": total_delta,
+                        "평가손익": total_profit,
                         "수익률": total_return,
                     }
                 )
@@ -514,6 +516,7 @@ if tickers:
                             "평가금액(이번달)": "{:,.0f}원",
                             "평가금액(지난달)": "{:,.0f}원",
                             "증감": "{:+,.0f}원",
+                            "평가손익": "{:+,.0f}원",
                             "수익률": "{:.1f}%",
                         },
                         na_rep="—",
@@ -525,5 +528,85 @@ if tickers:
         st.caption("아직 지난달 기록이 없어서 증감이 비어있어요. 다음 달부터 채워집니다.")
 else:
     st.info("종목별 데이터를 찾지 못했습니다. 디버그 모드를 켜고 로그를 확인해주세요.")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 매수/보류/매도 판단 (60일·120일 이평선 + 재무데이터, 야후 파이낸스 연동)
+# ---------------------------------------------------------------------------
+st.subheader("종목별 매수 · 보류 · 매도 판단")
+st.caption(
+    "⚠️ 투자 조언이 아니라 아래 규칙에 따른 단순 계산 결과입니다. "
+    "매수 고려: 실시간가 ≤ 120일 이평선 · 보류: 평단가 대비 ±5~10% · 매도 고려: 평단가 대비 -20% 이하"
+)
+
+if tickers:
+    @st.cache_data(ttl=6 * 60 * 60)  # 6시간 캐시 - 야후 파이낸스 호출을 너무 자주 하지 않도록
+    def _load_market_data(market: str, code: str):
+        import market_data
+        return market_data.fetch_technical_and_fundamental(market, code)
+
+    import market_data
+
+    signal_tabs = st.tabs(markets)
+    for tab, market in zip(signal_tabs, markets):
+        with tab:
+            with st.spinner(f"{market} 종목의 시세/재무 데이터를 불러오는 중..."):
+                sig_rows = []
+                for t in tickers:
+                    if t["market"] != market:
+                        continue
+                    md = _load_market_data(t["market"], t["code"])
+                    signal = market_data.classify_signal(t["avg_buy_price"], t["price"], md["ma120"])
+                    sig_rows.append(
+                        {
+                            "종목명": t["name"],
+                            "계좌": t["account"],
+                            "구매평단가": t["avg_buy_price"],
+                            "실시간평단가": t["price"],
+                            "60일 이평선": md["ma60"],
+                            "120일 이평선": md["ma120"],
+                            "기업매출": md["revenue"],
+                            "순이익": md["net_income"],
+                            "성장률": md["revenue_growth_pct"],
+                            "판단": signal,
+                        }
+                    )
+
+            if sig_rows:
+                df_sig = pd.DataFrame(sig_rows)
+
+                def _signal_color(row):
+                    colors = {
+                        "매수 고려": "color:#34d8b0;font-weight:600;",
+                        "매도 고려": "color:#ff6b6b;font-weight:600;",
+                        "보류": "color:#d4af37;font-weight:600;",
+                        "관망": "color:#8a94a6;",
+                    }
+                    style = colors.get(row["판단"], "")
+                    return ["" if col != "판단" else style for col in row.index]
+
+                st.dataframe(
+                    df_sig.style.apply(_signal_color, axis=1).format(
+                        {
+                            "구매평단가": "{:,.0f}원",
+                            "실시간평단가": "{:,.0f}원",
+                            "60일 이평선": "{:,.0f}원",
+                            "120일 이평선": "{:,.0f}원",
+                            "기업매출": "{:,.0f}",
+                            "순이익": "{:,.0f}",
+                            "성장률": "{:.1f}%",
+                        },
+                        na_rep="—",
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+    st.caption(
+        "60일/120일 이평선과 재무데이터는 야후 파이낸스 무료 데이터라 비어있거나 다소 부정확할 수 있어요. "
+        "국내 종목은 코스피(.KS)/코스닥(.KQ)을 자동으로 시도해서 찾습니다."
+    )
+else:
+    st.info("종목 데이터가 없어서 판단표를 만들 수 없습니다.")
 
 st.caption("이 페이지는 열릴 때마다(최대 10분 캐시) 구글시트 최신 값을 다시 읽어옵니다.")
