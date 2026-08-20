@@ -3,3 +3,4 @@ gspread>=6.1
 google-auth>=2.30
 plotly>=5.22
 pandas>=2.2
+yfinance>=0.2.40
