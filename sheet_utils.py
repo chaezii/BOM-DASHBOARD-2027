@@ -43,11 +43,15 @@ def grid_find(
 
 
 def to_number(raw) -> float | None:
-    """'₩1,196,547,592', '19.8%', '-114,500' 같은 문자열을 숫자로 변환."""
+    """'₩1,196,547,592', '19.8%', '-114,500' 같은 문자열을 숫자로 변환.
+    빈 칸/대시는 0으로, 수식 오류값(#N/A 등, 보통 실시간 시세 수식이 아직 못 불러온 경우)은
+    None(값 없음)으로 구분해서 반환 - 오류를 진짜 0원처럼 잘못 보여주지 않기 위함."""
     if raw is None:
         return None
     s = str(raw).strip()
-    if s in ("", "-", "\u2212", "#DIV/0!", "#VALUE!", "#REF!", "#N/A"):
+    if s in ("#DIV/0!", "#VALUE!", "#REF!", "#N/A", "#NAME?", "#NUM!", "#ERROR!"):
+        return None  # 수식 오류 - 실시간 시세를 아직 못 불러왔을 가능성이 높음
+    if s in ("", "-", "\u2212"):
         return 0.0
     neg = s.startswith("(") and s.endswith(")")
     s = s.strip("()")
