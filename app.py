@@ -8,10 +8,12 @@ Streamlit Community Cloud에 배포하면 고정 웹 링크가 생깁니다.
 import json
 from datetime import date
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 from fetch_data import fetch_all
+from sheet_utils import to_number
 
 # ---------------------------------------------------------------------------
 # 설정: 목표
@@ -24,9 +26,9 @@ st.set_page_config(page_title="통합 자산 대시보드", page_icon="\U0001F4C
 
 
 @st.cache_data(ttl=600)  # 10분 캐시 - 너무 자주 시트를 읽지 않도록
-def load_data(_sa_info_json: str, debug: bool):
+def load_data(_sa_info_json: str, _history_sheet_id: str | None, debug: bool):
     sa_info = json.loads(_sa_info_json)
-    return fetch_all(sa_info, debug=debug)
+    return fetch_all(sa_info, history_sheet_id=_history_sheet_id, debug=debug)
 
 
 def money(v):
@@ -82,8 +84,12 @@ if "gcp_service_account" not in st.secrets:
 
 sa_info_json = json.dumps(dict(st.secrets["gcp_service_account"]))
 
+history_sheet_id = None
+if "app" in st.secrets and st.secrets["app"].get("history_sheet_id"):
+    history_sheet_id = st.secrets["app"]["history_sheet_id"]
+
 try:
-    data = load_data(sa_info_json, debug_mode)
+    data = load_data(sa_info_json, history_sheet_id, debug_mode)
 except Exception as e:
     st.error(f"구글시트 연결/파싱 중 오류가 발생했습니다: {e}")
     st.info(
@@ -199,5 +205,102 @@ if ledger:
         )
 else:
     st.info("가계부 데이터를 찾지 못했습니다. 디버그 모드를 켜고 fetch_data.py의 라벨 검색 로직을 확인하세요.")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 자산현황 상세 항목 (전월 대비)
+# ---------------------------------------------------------------------------
+st.subheader("자산현황 상세 항목")
+if not history_sheet_id:
+    st.info(
+        "전월 대비를 보려면 '기록용 시트'를 연결해야 해요. "
+        "README의 '기록용 시트 만들기' 단계를 따라 secrets에 history_sheet_id를 추가해주세요."
+    )
+
+asset_items = asset.get("items", {})
+asset_prev = data.get("asset_prev_items", {})
+
+if asset_items:
+    rows = []
+    for name, cur_val in asset_items.items():
+        prev_val = asset_prev.get(name)
+        delta = (cur_val - prev_val) if (prev_val is not None) else None
+        rows.append(
+            {
+                "항목": name,
+                "이번 달": cur_val,
+                "지난달": prev_val if prev_val is not None else None,
+                "증감": delta,
+            }
+        )
+    df_assets = pd.DataFrame(rows)
+    st.dataframe(
+        df_assets.style.format(
+            {"이번 달": "{:,.0f}원", "지난달": "{:,.0f}원", "증감": "{:+,.0f}원"},
+            na_rep="—",
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+    if not asset_prev:
+        st.caption("아직 지난달 기록이 없어서 증감이 비어있어요. 다음 달부터 채워집니다.")
+else:
+    st.info("자산 상세 항목을 찾지 못했습니다. 디버그 모드를 켜고 로그를 확인해주세요.")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 주식 종목별 상세 (전월 대비)
+# ---------------------------------------------------------------------------
+st.subheader("주식 종목별 현황")
+
+tickers = stock.get("tickers", [])
+ticker_prev = data.get("ticker_prev", {})
+
+if tickers:
+    markets = sorted(set(t["market"] for t in tickers))
+    tabs = st.tabs(markets)
+    for tab, market in zip(tabs, markets):
+        with tab:
+            rows = []
+            for t in tickers:
+                if t["market"] != market:
+                    continue
+                key = f"{t['market']}|{t['account']}|{t['code']}"
+                prev = ticker_prev.get(key)
+                prev_eval = to_number(prev["eval_amount"]) if (prev and prev.get("eval_amount")) else None
+                delta = (t["eval_amount"] - prev_eval) if (prev_eval is not None and t["eval_amount"] is not None) else None
+                rows.append(
+                    {
+                        "종목명": t["name"],
+                        "계좌": t["account"],
+                        "보유수량": t["quantity"],
+                        "평가금액(이번달)": t["eval_amount"],
+                        "평가금액(지난달)": prev_eval,
+                        "증감": delta,
+                        "수익률": t["return_pct"],
+                    }
+                )
+            if rows:
+                df_t = pd.DataFrame(rows)
+                st.dataframe(
+                    df_t.style.format(
+                        {
+                            "보유수량": "{:,.0f}",
+                            "평가금액(이번달)": "{:,.0f}원",
+                            "평가금액(지난달)": "{:,.0f}원",
+                            "증감": "{:+,.0f}원",
+                            "수익률": "{:.1f}%",
+                        },
+                        na_rep="—",
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+    if not ticker_prev:
+        st.caption("아직 지난달 기록이 없어서 증감이 비어있어요. 다음 달부터 채워집니다.")
+else:
+    st.info("종목별 데이터를 찾지 못했습니다. 디버그 모드를 켜고 로그를 확인해주세요.")
 
 st.caption("이 페이지는 열릴 때마다(최대 10분 캐시) 구글시트 최신 값을 다시 읽어옵니다.")
