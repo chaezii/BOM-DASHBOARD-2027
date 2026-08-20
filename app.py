@@ -370,9 +370,39 @@ if tickers:
                     }
                 )
             if rows:
+                total_cur = sum(r["평가금액(이번달)"] or 0 for r in rows)
+                prev_vals = [r["평가금액(지난달)"] for r in rows]
+                total_prev = sum(prev_vals) if all(v is not None for v in prev_vals) else None
+                total_delta = (total_cur - total_prev) if total_prev is not None else None
+
+                total_buy = sum(
+                    (t["buy_amount"] or 0) for t in tickers if t["market"] == market
+                )
+                total_profit = sum(
+                    (t["profit"] or 0) for t in tickers if t["market"] == market
+                )
+                total_return = (total_profit / total_buy * 100) if total_buy else None
+
+                rows.append(
+                    {
+                        "종목명": "합계",
+                        "계좌": "",
+                        "보유수량": None,
+                        "평가금액(이번달)": total_cur,
+                        "평가금액(지난달)": total_prev,
+                        "증감": total_delta,
+                        "수익률": total_return,
+                    }
+                )
+
                 df_t = pd.DataFrame(rows)
+
+                def _highlight_total(row):
+                    is_total = row["종목명"] == "합계"
+                    return ["font-weight: bold; border-top: 2px solid #8a94a6" if is_total else "" for _ in row]
+
                 st.dataframe(
-                    df_t.style.format(
+                    df_t.style.apply(_highlight_total, axis=1).format(
                         {
                             "보유수량": "{:,.0f}",
                             "평가금액(이번달)": "{:,.0f}원",
