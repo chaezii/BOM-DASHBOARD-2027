@@ -86,3 +86,17 @@ def previous_period(all_periods: dict, current_period: str) -> str | None:
     """current_period보다 이전인 것들 중 가장 최근 것을 반환 (YYYY-MM 문자열 비교라 정렬 가능)."""
     earlier = sorted(p for p in all_periods if p < current_period)
     return earlier[-1] if earlier else None
+
+
+def shift_year_month(year_month: str, months_back: int) -> str:
+    """'2026-08'에서 months_back개월 전을 'YYYY-MM' 문자열로 계산."""
+    y, m = (int(x) for x in year_month.split("-"))
+    total = y * 12 + (m - 1) - months_back
+    ny, nm = divmod(total, 12)
+    return f"{ny:04d}-{nm + 1:02d}"
+
+
+def period_at_or_before(all_periods, target_period: str) -> str | None:
+    """target_period와 같거나 그 이전인 것들 중 가장 최근 기록을 반환."""
+    candidates = sorted(p for p in all_periods if p <= target_period)
+    return candidates[-1] if candidates else None
