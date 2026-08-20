@@ -193,6 +193,7 @@ def _parse_all_tickers(values: list[list[str]]) -> list[dict]:
                     "profit": to_number(row.get("손익")),
                     "return_pct": to_number(row.get("수익률(%)")),
                     "price": to_number(row.get("현재가")),
+                    "avg_buy_price": to_number(row.get("평단가")),
                 }
             )
     return tickers
