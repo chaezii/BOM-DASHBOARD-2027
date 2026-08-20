@@ -49,10 +49,10 @@ def gauge(value, goal, title, color):
         go.Indicator(
             mode="gauge+number",
             value=pct,
-            number={"suffix": "%", "font": {"size": 36}},
-            title={"text": title, "font": {"size": 16}},
+            number={"suffix": "%", "font": {"size": 36, "color": "#e8ecf1"}},
+            title={"text": title, "font": {"size": 16, "color": "#e8ecf1"}},
             gauge={
-                "axis": {"range": [0, 100], "tickcolor": "#8a94a6"},
+                "axis": {"range": [0, 100], "tickcolor": "#8a94a6", "tickfont": {"color": "#8a94a6"}},
                 "bar": {"color": color},
                 "bgcolor": "#12171f",
                 "borderwidth": 0,
@@ -156,7 +156,16 @@ for key, label in [
     if v:
         labels.append(label)
         values.append(v)
-fig = go.Figure(go.Pie(labels=labels, values=values, hole=0.6))
+fig = go.Figure(
+    go.Pie(
+        labels=labels,
+        values=values,
+        hole=0.6,
+        textinfo="label+percent",
+        textfont=dict(color="#e8ecf1", size=12),
+        marker=dict(line=dict(color="#12171f", width=2)),
+    )
+)
 fig.update_layout(
     height=340,
     paper_bgcolor="#12171f",
@@ -169,14 +178,36 @@ st.plotly_chart(fig, use_container_width=True)
 st.divider()
 
 # ---------------------------------------------------------------------------
-# 주식 포트폴리오 요약 (한 줄)
+# 주식 포트폴리오 요약 (한 줄, 작은 글씨)
 # ---------------------------------------------------------------------------
 st.subheader("주식 포트폴리오 요약")
-s1, s2, s3, s4 = st.columns(4)
-s1.metric("총 매수금액", money(stock.get("total_buy")))
-s2.metric("총 평가금액", money(stock.get("total_eval")))
-s3.metric("평가손익", money(stock.get("total_profit")))
-s4.metric("수익률", f"{stock.get('total_return_pct') or 0:.1f}%")
+
+
+def compact_metric_row(items):
+    cols = st.columns(len(items))
+    for col, (label, value, color) in zip(cols, items):
+        col.markdown(
+            f"""
+            <div style="background:#161c26;border:1px solid #232b36;border-radius:10px;
+                        padding:10px 14px;">
+              <div style="font-size:11px;color:#8a94a6;margin-bottom:4px;">{label}</div>
+              <div style="font-size:17px;font-weight:600;color:{color};
+                          font-family:'IBM Plex Mono',monospace;">{value}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+_profit = stock.get("total_profit") or 0
+compact_metric_row(
+    [
+        ("총 매수금액", money(stock.get("total_buy")), "#e8ecf1"),
+        ("총 평가금액", money(stock.get("total_eval")), "#e8ecf1"),
+        ("평가손익", money(_profit), "#34d8b0" if _profit >= 0 else "#ff6b6b"),
+        ("수익률", f"{stock.get('total_return_pct') or 0:.1f}%", "#34d8b0" if (stock.get('total_return_pct') or 0) >= 0 else "#ff6b6b"),
+    ]
+)
 
 st.divider()
 
