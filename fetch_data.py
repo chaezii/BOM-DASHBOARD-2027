@@ -17,6 +17,7 @@ from sheet_utils import (
     find_date_in_row,
     parse_asset_detail_items,
     parse_ticker_tables,
+    parse_monthly_category_table,
 )
 import history_store
 
@@ -96,6 +97,32 @@ def fetch_asset_summary(gc: gspread.Client, debug: bool = False) -> dict:
         print("[asset_summary]", {k: v for k, v in result.items() if k != "items"})
         print("[asset_items]", result["items"])
     return result
+
+
+# ---------------------------------------------------------------------------
+# 1-1) 자산현황 파일의 '소비관리' 탭 (카테고리별 월간 지출)
+# ---------------------------------------------------------------------------
+def fetch_asset_spending_categories(gc: gspread.Client, debug: bool = False) -> dict:
+    worksheets = _all_worksheets_values(gc, SHEET_IDS["asset"])
+
+    tab_name, values = _find_worksheet_containing(worksheets, "Eat")
+    if values is None:
+        # 'Eat' 라벨이 없으면, 월 헤더(1월~12월)만으로도 찾아봄
+        for tname, tvalues in worksheets:
+            parsed = parse_monthly_category_table(tvalues)
+            if parsed.get("categories"):
+                tab_name, values = tname, tvalues
+                break
+
+    if values is None:
+        if debug:
+            print("[spending] '소비관리' 탭을 찾지 못했습니다.")
+        return {}
+
+    parsed = parse_monthly_category_table(values)
+    if debug:
+        print(f"[spending] '{tab_name}' 탭에서 파싱:", parsed)
+    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -246,9 +273,11 @@ def fetch_all(
     asset = fetch_asset_summary(gc, debug=debug)
     stock = fetch_stock_summary(gc, debug=debug)
     ledger = fetch_ledger_monthly(gc, debug=debug)
+    spending = fetch_asset_spending_categories(gc, debug=debug)
 
     asset_prev_items: dict = {}
     ticker_prev: dict = {}
+    stock_trend: dict = {}
 
     if history_sheet_id:
         # --- 자산 항목 스냅샷 저장 + 지난달 값 불러오기 ---
@@ -294,13 +323,58 @@ def fetch_all(
         if debug:
             print(f"[history] stock 이전 기록 달: {prev_ym2}, 종목 수: {len(ticker_prev)}")
 
+        # --- 포트폴리오 총액 스냅샷 저장 + 3개월전/6개월전 값 불러오기 ---
+        totals_header = ["year_month", "total_buy", "total_eval", "total_profit", "total_return_pct"]
+        history_store.upsert_snapshot(
+            gc, history_sheet_id, "portfolio_totals", totals_header, year_month,
+            [[
+                str(stock.get("total_buy") or ""),
+                str(stock.get("total_eval") or ""),
+                str(stock.get("total_profit") or ""),
+                str(stock.get("total_return_pct") or ""),
+            ]],
+        )
+        all_totals_periods = history_store.load_all_periods(gc, history_sheet_id, "portfolio_totals")
+
+        def _totals_at(period_row):
+            if not period_row:
+                return None
+            row = period_row[0]
+            return {
+                "total_buy": to_number(row.get("total_buy")),
+                "total_eval": to_number(row.get("total_eval")),
+                "total_profit": to_number(row.get("total_profit")),
+                "total_return_pct": to_number(row.get("total_return_pct")),
+            }
+
+        target_3m = history_store.shift_year_month(year_month, 3)
+        target_6m = history_store.shift_year_month(year_month, 6)
+        period_3m = history_store.period_at_or_before(all_totals_periods, target_3m)
+        period_6m = history_store.period_at_or_before(all_totals_periods, target_6m)
+
+        stock_trend = {
+            "current": {
+                "period": year_month,
+                "total_buy": stock.get("total_buy"),
+                "total_eval": stock.get("total_eval"),
+                "total_profit": stock.get("total_profit"),
+                "total_return_pct": stock.get("total_return_pct"),
+            },
+            "3m_ago": {"period": period_3m, **(_totals_at(all_totals_periods.get(period_3m)) or {})} if period_3m else None,
+            "6m_ago": {"period": period_6m, **(_totals_at(all_totals_periods.get(period_6m)) or {})} if period_6m else None,
+        }
+        if debug:
+            print("[history] stock_trend:", stock_trend)
+
     return {
         "year_month": year_month,
         "asset": asset,
         "stock": stock,
         "ledger": ledger,
+        "spending": spending,
         "asset_prev_items": asset_prev_items,
         "ticker_prev": ticker_prev,
+        "stock_trend": stock_trend,
     }
 
 
