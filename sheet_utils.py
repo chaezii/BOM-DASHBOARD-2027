@@ -139,6 +139,46 @@ def parse_asset_detail_items(
     return items
 
 
+def parse_monthly_category_table(
+    values: list[list[str]],
+    month_labels: tuple[str, ...] = tuple(f"{m}월" for m in range(1, 13)),
+    total_label: str = "합계",
+) -> dict:
+    """
+    '항목 | 합계 | 1월 | 2월 | ... | 12월' 형태의 표를 찾아서
+    {"categories": {카테고리명: [1월값,...,12월값]}, "total": [1월합계,...,12월합계]} 로 반환.
+    """
+    header_row_idx = None
+    month_col_positions: dict[str, int] = {}
+    for r, row in enumerate(values):
+        cells = [(c or "").strip() for c in row]
+        if "1월" in cells and "12월" in cells:
+            header_row_idx = r
+            for c, cell in enumerate(cells):
+                if cell in month_labels:
+                    month_col_positions[cell] = c
+            break
+
+    if header_row_idx is None:
+        return {}
+
+    categories = {}
+    total_row = None
+    for r in range(header_row_idx + 1, len(values)):
+        row = values[r]
+        name = (row[0] or "").strip() if row else ""
+        if not name:
+            continue
+        monthly = [to_number(row[month_col_positions[m]]) if month_col_positions.get(m, -1) < len(row) else None for m in month_labels]
+        monthly = [v or 0 for v in monthly]
+        if name == total_label:
+            total_row = monthly
+            break
+        categories[name] = monthly
+
+    return {"categories": categories, "total": total_row, "months": list(month_labels)}
+
+
 def parse_ticker_tables(
     values: list[list[str]],
     required_headers: tuple[str, ...] = ("종목명", "종목코드"),
