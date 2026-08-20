@@ -110,29 +110,41 @@ def fetch_stock_summary(gc: gspread.Client, debug: bool = False) -> dict:
     if values is None:
         if debug:
             print("[stock] '계좌명' 이라는 글자를 어느 탭에서도 못 찾았습니다.")
-        return {}
-    if debug:
-        print(f"[stock] '{tab_name}' 탭에서 데이터를 찾았습니다.")
+        totals = {}
+    else:
+        if debug:
+            print(f"[stock] '{tab_name}' 탭에서 계좌 요약을 찾았습니다.")
+        totals = find_table_total(
+            values,
+            header_label="계좌명",
+            columns=["매수금액", "평가금액", "수익", "현재 수익률 (5%이상 유지)", "보유수량"],
+            total_label="합계",
+        )
 
-    totals = find_table_total(
-        values,
-        header_label="계좌명",
-        columns=["매수금액", "평가금액", "수익", "현재 수익률 (5%이상 유지)", "보유수량"],
-        total_label="합계",
-    )
+    # 종목(티커)은 계좌 요약과 다른 탭에 있을 수 있어서, 모든 탭을 다 뒤져서 찾습니다.
+    tickers = []
+    for tname, tvalues in worksheets:
+        found = _parse_all_tickers(tvalues)
+        if found and debug:
+            print(f"[stock] '{tname}' 탭에서 종목 {len(found)}개 발견")
+        tickers.extend(found)
+
     result = {
         "total_buy": to_number(totals.get("매수금액")),
         "total_eval": to_number(totals.get("평가금액")),
         "total_profit": to_number(totals.get("수익")),
         "total_return_pct": to_number(totals.get("현재 수익률 (5%이상 유지)")),
         "total_shares": to_number(totals.get("보유수량")),
-        "tickers": _parse_all_tickers(values),
+        "tickers": tickers,
     }
     if debug:
         print("[stock_summary]", {k: v for k, v in result.items() if k != "tickers"})
-        print(f"[stock_tickers] {len(result['tickers'])}개 종목 발견")
+        print(f"[stock_tickers] 총 {len(result['tickers'])}개 종목 발견")
         for t in result["tickers"]:
             print("  ", t)
+        if not result["tickers"]:
+            print("  -> 어느 탭에서도 '종목명'+'종목코드' 헤더를 못 찾았습니다. "
+                  "실제 시트의 헤더 문구가 다른지 확인이 필요합니다.")
     return result
 
 
