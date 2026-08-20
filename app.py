@@ -179,29 +179,72 @@ st.divider()
 # ---------------------------------------------------------------------------
 # 가계부 월별 추이
 # ---------------------------------------------------------------------------
-st.subheader("가계부 · 월별 수입/지출/저축")
+# ---------------------------------------------------------------------------
+# 가계부 · 수입/지출 흐름
+# ---------------------------------------------------------------------------
+st.subheader("가계부 · 수입 · 지출 흐름")
 if ledger:
     months = [m["date"] for m in ledger]
-    income = [m["income"] or 0 for m in ledger]
-    expense = [m["expense"] or 0 for m in ledger]
+    income_vals = [m["income"] or 0 for m in ledger]
+    expense_vals = [m["expense"] or 0 for m in ledger]
+    expense_bars = [-e for e in expense_vals]  # 0 밑으로 내려가게 (지출은 아래로 흘러나가는 느낌)
+
+    cum_saving = []
+    running = 0
+    for inc, exp in zip(income_vals, expense_vals):
+        running += inc - exp
+        cum_saving.append(running)
+
     fig = go.Figure()
-    fig.add_bar(x=months, y=income, name="수입", marker_color="#34d8b0")
-    fig.add_bar(x=months, y=expense, name="지출", marker_color="#ff6b6b")
+    fig.add_bar(
+        x=months, y=income_vals, name="수입",
+        marker_color="#34d8b0",
+        hovertemplate="수입 %{y:,.0f}원<extra></extra>",
+    )
+    fig.add_bar(
+        x=months, y=expense_bars, name="지출",
+        marker_color="#ff6b6b",
+        hovertemplate="지출 %{customdata:,.0f}원<extra></extra>",
+        customdata=expense_vals,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=months, y=cum_saving, name="누적 순저축",
+            mode="lines+markers",
+            line=dict(color="#d4af37", width=3),
+            marker=dict(size=6),
+            yaxis="y2",
+            hovertemplate="누적 순저축 %{y:,.0f}원<extra></extra>",
+        )
+    )
     fig.update_layout(
-        barmode="group",
-        height=320,
+        barmode="relative",
+        height=380,
         paper_bgcolor="#12171f",
         plot_bgcolor="#12171f",
         font={"color": "#e8ecf1"},
-        legend=dict(orientation="h"),
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(t=40, b=10),
+        yaxis=dict(
+            title="월별 수입(위) · 지출(아래)",
+            zeroline=True, zerolinecolor="#8a94a6", zerolinewidth=1.5,
+            gridcolor="#232b36",
+        ),
+        yaxis2=dict(
+            title="누적 순저축",
+            overlaying="y", side="right",
+            showgrid=False,
+        ),
+        xaxis=dict(gridcolor="#232b36"),
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption("초록 막대(수입)는 위로, 빨강 막대(지출)는 아래로 흘러요. 금색 선은 그 차이가 계속 쌓인 누적 순저축입니다.")
 
     filled_income = [m for m in ledger if m["income"]]
     if len(filled_income) < len(ledger) / 2:
         st.warning(
             "가계부에 수입이 입력된 달이 적어서(전체 중 일부만) 실제 저축여력을 "
-            "정확히 계산할 수 없습니다. 매달 수입을 입력하면 이 대시보드가 더 정확해집니다."
+            "정확히 계산할 수 없습니다. 매달 수입을 입력하면 이 흐름이 더 정확해집니다."
         )
 else:
     st.info("가계부 데이터를 찾지 못했습니다. 디버그 모드를 켜고 fetch_data.py의 라벨 검색 로직을 확인하세요.")
