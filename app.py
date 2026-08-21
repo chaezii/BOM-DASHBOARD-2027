@@ -868,20 +868,33 @@ if tickers:
             with st.spinner(f"{market} 종목의 시세 데이터를 불러오는 중..."):
                 sig_rows = []
                 reasons_map = {}
+                yf_failures = 0
                 for t in tickers:
                     if t["market"] != market:
                         continue
-                    try:
-                        md = _load_market_data(t["market"], t["code"])
-                        if not isinstance(md, dict):
-                            md = {}
 
-                        avg_buy = t.get("avg_buy_price")
-                        cur_price = t.get("price")
-                        if use_usd and usd_krw_rate:
+                    # 1) 시트에서 온 값은 항상 먼저 채워둠 - 야후 파이낸스가 실패해도 이 값들은 안전.
+                    avg_buy = t.get("avg_buy_price")
+                    cur_price = t.get("price")
+                    if use_usd and usd_krw_rate:
+                        try:
                             avg_buy = (avg_buy / usd_krw_rate) if avg_buy is not None else None
                             cur_price = (cur_price / usd_krw_rate) if cur_price is not None else None
+                        except Exception:
+                            pass  # 변환 실패해도 원래 값 유지
 
+                    # 2) 야후 파이낸스 조회 - 실패해도 아래 값들만 비고, 위 시트값엔 영향 없음.
+                    md = {}
+                    try:
+                        loaded = _load_market_data(t["market"], t["code"])
+                        if isinstance(loaded, dict):
+                            md = loaded
+                    except Exception as e:
+                        yf_failures += 1
+                        reasons_map[t.get("name", "")] = [f"시세 데이터 조회 실패: {e}"]
+
+                    # 3) 판단 계산 - 이것도 별도로 감싸서, 실패해도 위 값들은 표에 그대로 남음.
+                    try:
                         result = market_data.classify_signal(
                             avg_buy, cur_price, md.get("ma120"),
                             three_year_low=md.get("three_year_low"),
@@ -889,34 +902,33 @@ if tickers:
                             target_weight_pct=t.get("target_weight_pct"),
                             current_weight_pct=t.get("current_weight_pct"),
                         )
-                        reasons_map[t["name"]] = result["reasons"]
-                        row = {
-                            "종목명": t["name"],
-                            "계좌": t.get("account", ""),
-                            "구매평단가": avg_buy,
-                            "실시간평단가": cur_price,
-                            "실시간수익률": result.get("return_pct"),
-                            "60일 이평선": md.get("ma60"),
-                            "120일 이평선": md.get("ma120"),
-                            "3년 전저점": md.get("three_year_low"),
-                            "3년 전고점": md.get("three_year_high"),
-                            "목표비중": t.get("target_weight_pct"),
-                            "현재비중": t.get("current_weight_pct"),
-                            "판단": result["signal"],
-                        }
                     except Exception as e:
-                        # 종목 하나에서 문제가 생겨도 나머지 종목은 정상 표시되도록
-                        reasons_map[t.get("name", "알 수 없음")] = [f"데이터 처리 오류: {e}"]
-                        row = {
-                            "종목명": t.get("name", "알 수 없음"),
-                            "계좌": t.get("account", ""),
-                            "구매평단가": None, "실시간평단가": None, "실시간수익률": None,
-                            "60일 이평선": None, "120일 이평선": None,
-                            "3년 전저점": None, "3년 전고점": None,
-                            "목표비중": None, "현재비중": None,
-                            "판단": "—",
-                        }
-                    sig_rows.append(row)
+                        result = {"signal": "—", "reasons": [f"판단 계산 오류: {e}"], "return_pct": None}
+
+                    if t.get("name") not in reasons_map:
+                        reasons_map[t.get("name", "")] = result["reasons"]
+
+                    sig_rows.append({
+                        "종목명": t.get("name", ""),
+                        "계좌": t.get("account", ""),
+                        "구매평단가": avg_buy,
+                        "실시간평단가": cur_price,
+                        "실시간수익률": result.get("return_pct"),
+                        "60일 이평선": md.get("ma60"),
+                        "120일 이평선": md.get("ma120"),
+                        "3년 전저점": md.get("three_year_low"),
+                        "3년 전고점": md.get("three_year_high"),
+                        "목표비중": t.get("target_weight_pct"),
+                        "현재비중": t.get("current_weight_pct"),
+                        "판단": result["signal"],
+                    })
+
+                if yf_failures and yf_failures == len(sig_rows) and sig_rows:
+                    st.warning(
+                        "⚠️ 이 탭의 모든 종목에서 야후 파이낸스 시세 조회에 실패했어요. "
+                        "이평선·3년 고점/저점만 비어있고, 구매평단가·비중 등 시트 값은 정상입니다. "
+                        "Streamlit Cloud에서 야후 파이낸스 접속이 일시적으로 막힌 경우가 많아요 — 잠시 후 새로고침해보세요."
+                    )
 
             if sig_rows:
                 df_sig = pd.DataFrame(sig_rows)
