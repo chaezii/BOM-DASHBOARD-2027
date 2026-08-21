@@ -122,16 +122,41 @@ def parse_asset_detail_items(
     if not total_matches:
         return {}
     total_row = total_matches[0][0]
+    return _parse_label_value_rows(values, 0, total_row)
 
+
+def parse_liability_detail_items(
+    values: list[list[str]],
+    start_label: str = "자산",
+    end_label: str = "부채",
+) -> dict:
+    """
+    '자산' 합계 행 다음부터 '부채' 합계 행 전까지 나열된 개별 부채(대출 등) 라인들을
+    {항목명: 금액} 딕셔너리로 반환. 두 라벨 중 하나라도 없으면 빈 딕셔너리."""
+    start_matches = grid_find_all(values, start_label)
+    end_matches = grid_find_all(values, end_label)
+    if not start_matches or not end_matches:
+        return {}
+    start_row = start_matches[0][0]
+    end_row = None
+    for r, _c in end_matches:
+        if r > start_row:
+            end_row = r
+            break
+    if end_row is None:
+        return {}
+    return _parse_label_value_rows(values, start_row + 1, end_row)
+
+
+def _parse_label_value_rows(values: list[list[str]], from_row: int, to_row: int) -> dict:
     items = {}
-    for r in range(0, total_row):
-        row = values[r]
+    for r in range(from_row, to_row):
+        row = values[r] if r < len(values) else None
         if not row:
             continue
         name = (row[0] or "").strip()
         if not name or name in ("항목", "합계"):
             continue
-        # 이름 옆 칸들 중 숫자로 해석되는 첫 값을 금액으로 사용
         value = None
         for c in range(1, min(len(row), 4)):
             v = to_number(row[c])
