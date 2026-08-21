@@ -830,13 +830,13 @@ else:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# 매수/보류/매도 판단 (60일·120일 이평선 + 3년 고점/저점, 야후 파이낸스 연동)
+# 매수/보류/매도 판단 (60일·120일 이평선 + 시트 수익률, 야후 파이낸스 연동)
 # ---------------------------------------------------------------------------
 st.subheader("종목별 매수 · 보류 · 매도 판단")
 st.caption(
     "⚠️ 투자 조언이 아니라 아래 규칙에 따른 단순 계산 결과입니다. "
-    "매수: 목표비중 미달 + 120일 이평선 이하 + 3년 전저점 5% 이내 (3가지 전부) · "
-    "매도: 수익률 -30% 이하 / 목표비중 1.5배 초과 / 3년 전고점 대비 -40% 급락 (하나라도) · 나머지는 보류"
+    "매수: 목표비중 미달 + 60일·120일 이평선 모두 이하 (둘 다) · "
+    "매도: 수익률(시트) -30% 이하 / 목표비중 1.5배 초과 (하나라도) · 나머지는 보류"
 )
 
 if tickers:
@@ -876,6 +876,7 @@ if tickers:
                     # 1) 시트에서 온 값은 항상 먼저 채워둠 - 야후 파이낸스가 실패해도 이 값들은 안전.
                     avg_buy = t.get("avg_buy_price")
                     cur_price = t.get("price")
+                    sheet_return_pct = t.get("return_pct")  # 실시간 계산 대신 시트에 이미 있는 수익률 그대로 사용
                     if use_usd and usd_krw_rate:
                         try:
                             avg_buy = (avg_buy / usd_krw_rate) if avg_buy is not None else None
@@ -896,14 +897,12 @@ if tickers:
                     # 3) 판단 계산 - 이것도 별도로 감싸서, 실패해도 위 값들은 표에 그대로 남음.
                     try:
                         result = market_data.classify_signal(
-                            avg_buy, cur_price, md.get("ma120"),
-                            three_year_low=md.get("three_year_low"),
-                            three_year_high=md.get("three_year_high"),
+                            sheet_return_pct, cur_price, md.get("ma60"), md.get("ma120"),
                             target_weight_pct=t.get("target_weight_pct"),
                             current_weight_pct=t.get("current_weight_pct"),
                         )
                     except Exception as e:
-                        result = {"signal": "—", "reasons": [f"판단 계산 오류: {e}"], "return_pct": None}
+                        result = {"signal": "—", "reasons": [f"판단 계산 오류: {e}"]}
 
                     if t.get("name") not in reasons_map:
                         reasons_map[t.get("name", "")] = result["reasons"]
@@ -913,11 +912,9 @@ if tickers:
                         "계좌": t.get("account", ""),
                         "구매평단가": avg_buy,
                         "실시간평단가": cur_price,
-                        "실시간수익률": result.get("return_pct"),
+                        "수익률": sheet_return_pct,
                         "60일 이평선": md.get("ma60"),
                         "120일 이평선": md.get("ma120"),
-                        "3년 전저점": md.get("three_year_low"),
-                        "3년 전고점": md.get("three_year_high"),
                         "목표비중": t.get("target_weight_pct"),
                         "현재비중": t.get("current_weight_pct"),
                         "판단": result["signal"],
@@ -926,7 +923,7 @@ if tickers:
                 if yf_failures and yf_failures == len(sig_rows) and sig_rows:
                     st.warning(
                         "⚠️ 이 탭의 모든 종목에서 야후 파이낸스 시세 조회에 실패했어요. "
-                        "이평선·3년 고점/저점만 비어있고, 구매평단가·비중 등 시트 값은 정상입니다. "
+                        "이평선만 비어있고, 구매평단가·수익률·비중 등 시트 값은 정상입니다. "
                         "Streamlit Cloud에서 야후 파이낸스 접속이 일시적으로 막힌 경우가 많아요 — 잠시 후 새로고침해보세요."
                     )
 
@@ -946,8 +943,8 @@ if tickers:
                     for col in row.index:
                         if col == "판단":
                             styles.append(colors.get(row["판단"], ""))
-                        elif col == "실시간수익률":
-                            v = row["실시간수익률"]
+                        elif col == "수익률":
+                            v = row["수익률"]
                             styles.append("color:#34d8b0;" if (v is not None and v >= 0) else ("color:#ff6b6b;" if v is not None else ""))
                         else:
                             styles.append("")
@@ -959,11 +956,9 @@ if tickers:
                         {
                             "구매평단가": price_fmt,
                             "실시간평단가": price_fmt,
-                            "실시간수익률": "{:+.1f}%",
+                            "수익률": "{:+.1f}%",
                             "60일 이평선": price_fmt,
                             "120일 이평선": price_fmt,
-                            "3년 전저점": price_fmt,
-                            "3년 전고점": price_fmt,
                             "목표비중": "{:.1f}%",
                             "현재비중": "{:.1f}%",
                         },
@@ -978,8 +973,8 @@ if tickers:
                 if use_usd:
                     st.caption(f"이 탭은 전부 달러($) 기준이에요. (환율 1USD ≈ {usd_krw_rate:,.0f}원 적용)")
     st.caption(
-        "이평선·3년 고점/저점은 야후 파이낸스 무료 데이터라 비어있거나 다소 부정확할 수 있어요. "
-        "목표비중은 주식 포트폴리오 시트의 '목표 비중' 열을 그대로 가져온 값이에요 (없으면 '—')."
+        "60일/120일 이평선은 야후 파이낸스 무료 데이터라 비어있거나 다소 부정확할 수 있어요. "
+        "수익률은 시트의 '수익률(%)' 값을 그대로 가져온 값이고, 목표비중은 시트의 '목표 비중' 열을 그대로 가져온 값이에요 (없으면 '—')."
     )
 else:
     st.info("종목 데이터가 없어서 판단표를 만들 수 없습니다.")
