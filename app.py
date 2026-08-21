@@ -830,13 +830,16 @@ else:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# 매수/보류/매도 판단 (60일·120일 이평선 + 재무데이터, 야후 파이낸스 연동)
+# 매수/보류/매도 판단 (60일·120일 이평선 + 3년 고점/저점, 야후 파이낸스 연동)
 # ---------------------------------------------------------------------------
 st.subheader("종목별 매수 · 보류 · 매도 판단")
 st.caption(
-    "⚠️ 투자 조언이 아니라 아래 규칙에 따른 단순 계산 결과입니다. 장기 가치투자 관점(워런 버핏/찰리 멍거 식)을 참고했어요 — "
-    "가격이 조금 움직였다고 바로 사고팔지 않고, ①목표비중 대비 실제비중 ②흑자 여부(BEP) ③저평가 구간(120일 이평선) ④밸류에이션(PER) ⑤재무건전성(부채비율)을 같이 봅니다."
+    "⚠️ 투자 조언이 아니라 아래 규칙에 따른 단순 계산 결과입니다. "
+    "매수: 목표비중 미달 + 120일 이평선 이하 + 3년 전저점 5% 이내 (3가지 전부) · "
+    "매도: 수익률 -30% 이하 / 목표비중 1.5배 초과 / 3년 전고점 대비 -40% 급락 (하나라도) · 나머지는 보류"
 )
+
+all_sig_rows_for_ai = []  # AI 브리핑용 - tickers가 없으면 빈 채로 유지
 
 if tickers:
     @st.cache_data(ttl=6 * 60 * 60)  # 6시간 캐시 - 야후 파이낸스 호출을 너무 자주 하지 않도록
@@ -864,7 +867,7 @@ if tickers:
                 st.warning("환율 정보를 못 가져와서, 이 탭은 원화 기준으로 대신 표시합니다.")
                 use_usd = False
 
-            with st.spinner(f"{market} 종목의 시세/재무 데이터를 불러오는 중..."):
+            with st.spinner(f"{market} 종목의 시세 데이터를 불러오는 중..."):
                 sig_rows = []
                 reasons_map = {}
                 for t in tickers:
@@ -880,31 +883,28 @@ if tickers:
 
                     result = market_data.classify_signal(
                         avg_buy, cur_price, md["ma120"],
+                        three_year_low=md.get("three_year_low"),
+                        three_year_high=md.get("three_year_high"),
                         target_weight_pct=t.get("target_weight_pct"),
                         current_weight_pct=t.get("current_weight_pct"),
-                        is_profitable=md.get("is_profitable"),
-                        pe_ratio=md.get("pe_ratio"),
-                        debt_to_equity=md.get("debt_to_equity"),
                     )
-                    bep_label = {True: "흑자", False: "적자", None: "—"}[md.get("is_profitable")]
                     reasons_map[t["name"]] = result["reasons"]
-                    sig_rows.append(
-                        {
-                            "종목명": t["name"],
-                            "계좌": t["account"],
-                            "구매평단가": avg_buy,
-                            "실시간평단가": cur_price,
-                            "60일 이평선": md["ma60"],
-                            "120일 이평선": md["ma120"],
-                            "목표비중": t.get("target_weight_pct"),
-                            "현재비중": t.get("current_weight_pct"),
-                            "BEP": bep_label,
-                            "PER": md.get("pe_ratio"),
-                            "ROE": md.get("roe_pct"),
-                            "부채비율": md.get("debt_to_equity"),
-                            "판단": result["signal"],
-                        }
-                    )
+                    row = {
+                        "종목명": t["name"],
+                        "계좌": t["account"],
+                        "구매평단가": avg_buy,
+                        "실시간평단가": cur_price,
+                        "실시간수익률": result.get("return_pct"),
+                        "60일 이평선": md["ma60"],
+                        "120일 이평선": md["ma120"],
+                        "3년 전저점": md.get("three_year_low"),
+                        "3년 전고점": md.get("three_year_high"),
+                        "목표비중": t.get("target_weight_pct"),
+                        "현재비중": t.get("current_weight_pct"),
+                        "판단": result["signal"],
+                    }
+                    sig_rows.append(row)
+                    all_sig_rows_for_ai.append({**row, "market": market})
 
             if sig_rows:
                 df_sig = pd.DataFrame(sig_rows)
@@ -918,13 +918,13 @@ if tickers:
                         "매도 고려": "color:#ff6b6b;font-weight:600;",
                         "보류": "color:#d4af37;font-weight:600;",
                     }
-                    bep_colors = {"흑자": "color:#34d8b0;", "적자": "color:#ff6b6b;"}
                     styles = []
                     for col in row.index:
                         if col == "판단":
                             styles.append(colors.get(row["판단"], ""))
-                        elif col == "BEP":
-                            styles.append(bep_colors.get(row["BEP"], ""))
+                        elif col == "실시간수익률":
+                            v = row["실시간수익률"]
+                            styles.append("color:#34d8b0;" if (v is not None and v >= 0) else ("color:#ff6b6b;" if v is not None else ""))
                         else:
                             styles.append("")
                     return styles
@@ -935,13 +935,13 @@ if tickers:
                         {
                             "구매평단가": price_fmt,
                             "실시간평단가": price_fmt,
+                            "실시간수익률": "{:+.1f}%",
                             "60일 이평선": price_fmt,
                             "120일 이평선": price_fmt,
+                            "3년 전저점": price_fmt,
+                            "3년 전고점": price_fmt,
                             "목표비중": "{:.1f}%",
                             "현재비중": "{:.1f}%",
-                            "PER": "{:.1f}배",
-                            "ROE": "{:.1f}%",
-                            "부채비율": "{:.0f}%",
                         },
                         na_rep="—",
                     ),
@@ -954,10 +954,196 @@ if tickers:
                 if use_usd:
                     st.caption(f"이 탭은 전부 달러($) 기준이에요. (환율 1USD ≈ {usd_krw_rate:,.0f}원 적용)")
     st.caption(
-        "이평선·재무지표는 야후 파이낸스 무료 데이터라 비어있거나 다소 부정확할 수 있어요. "
+        "이평선·3년 고점/저점은 야후 파이낸스 무료 데이터라 비어있거나 다소 부정확할 수 있어요. "
         "목표비중은 주식 포트폴리오 시트의 '목표 비중' 열을 그대로 가져온 값이에요 (없으면 '—')."
     )
 else:
     st.info("종목 데이터가 없어서 판단표를 만들 수 없습니다.")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 오늘의 시장 브리핑 (정적 스냅샷 - 필요할 때 이 텍스트를 교체해서 갱신)
+# ---------------------------------------------------------------------------
+MARKET_BRIEFING_INTRO = """
+**🇰🇷 국장 (전일 코스피/코스닥)**
+- 8/20 기준 SK하이닉스 +12.73%, 삼성전자 +9.49% 급등 — 반도체 대형주 중심 강세
+- 8/18에는 코스피가 장중 7,200을 회복했다가 매물 출회로 6,800선까지 반납하는 등 변동성이 커진 장세
+- 최근 흐름: 반도체가 지수를 끌어올렸다 반납하는 롤러코스터 장세 지속 중
+
+**🇺🇸 미장 (밤새 뉴욕증시)**
+- 8/20(현지시간) 뉴욕 3대 지수 모두 상승 마감 — 나스닥 +0.16%(26,331.09), 다우 +0.22%(53,463.11), S&P500 +0.24%(7,710.70)
+- 국채 금리 반등으로 상승폭이 줄어드는 흐름, 에너지 가격 상승에 따른 인플레이션 우려가 시장을 눌렀어요
+- 전반적으로 "완만한 상승, 큰 모멘텀은 없는" 하루
+
+**💡 국장 vs 미장 연결 포인트**
+- 국장은 반도체 주도로 크게 출렁였는데, 미장은 상대적으로 잔잔했어요 → 삼성전자 포지션은 미국장보다 국내 수급(외국인·기관 동향)을 더 주시할 필요
+- 미장은 금리·인플레이션 이슈로 상단이 막힌 분위기 → MSFT/META/GOOGL 등은 당분간 박스권 흐름 예상
+
+---
+
+**공포탐욕지수(Fear & Greed Index)** — 시장 전체 분위기가 겁먹었는지 흥분했는지를 0~100으로 보여주는 지표예요. 2026년 8월 19일 기준 **56점, '탐욕(Greed)' 구간**입니다.
+
+| 구간 | 의미 |
+|---|---|
+| 0~25 (극도의 공포) | 다들 패닉 상태 → 저가 매수 최적기 |
+| 26~45 (공포) | 다소 불안 → 우량주 저가 매수 시작 시점 |
+| 46~55 (중립) | 방향성 탐색 중 |
+| **56~75 (탐욕) ← 지금 여기** | 낙관 분위기 → 신규 진입 조심, 수익 실현 고민할 시점 |
+| 76~100 (극도의 탐욕) | 광기 구간, 조정 위험 신호 |
+
+지금은 "바겐세일" 타이밍이 아니라 "너무 오른 거 아닌가" 점검이 필요한 구간이에요. 다만 극단적 탐욕(76점 이상)은 아니라 당장 폭락 신호는 아니고, "완만한 경계" 정도로 보면 됩니다.
+
+⚠️ RSI(개별 종목 과열도)·VIX(변동성 지수)는 실시간 조회가 안 되는 데이터라, 아래 코멘트는 시트의 수익률·전일 대비 등락 기준 모멘텀 추정치예요. 실제 매매 전엔 HTS/MTS에서 RSI를 직접 확인하세요.
+"""
+
+MARKET_BRIEFING_KR = """
+**삼성전자 (005930)** — 일반계좌 35주 · +205% · 어제 +9.49%
+반도체 업황은 좋지만 하루 +9%는 단기 과열 신호. 목표비중 15% 대비 12.26%로 여유는 있지만, 지금 더 사기보다 눌림목을 기다리는 게 안전. 일부 익절 고려.
+
+**HD현대일렉트릭 (267260)** — 일반계좌 2주 · -29.59% · 어제 -0.80%
+전력기기는 AI 데이터센터 테마로 주목받지만 낙폭이 큼. 반등 신호 확인 전엔 관망 권장.
+
+**KB금융 (105560)** — 일반계좌 2주 · 0% · 어제 -3.85%
+목표비중이 원래 작아(1%) 크게 신경 쓸 필요 없음. 관망 유지.
+
+**현대차 (005380)** — 일반계좌 1주 · -24.09% · 어제 +0.85%
+목표비중(3%) 대비 현재 2.17%로 매수 우선순위지만, 업종 부진 중이라 소액 분할매수 권장.
+
+**TIGER 미국배당다우존스 (458730)** — ISA+연금저축 · +36.86% · 어제 +1.05%
+탐욕 구간에서 상대적으로 안전한 배당형 ETF. 적립식 매수 지속 무방.
+
+**RISE 미국 S&P500 (379780)** — ISA+연금저축 · +16~45%(계좌별) · 어제 +0.13%
+개별종목 리스크 적은 대표지수 ETF. 꾸준히 유지.
+
+**RISE 미국나스닥100 (368590)** — ISA+연금저축+퇴직연금 · +14~49%(계좌별) · 어제 +0.23%
+퇴직연금 내 67.34% 비중으로 핵심 자산. 장기 보유는 괜찮지만 신규 자금 집중은 잠시 자제.
+
+**TIGER 미국 S&P500 (360750)** — ISA+퇴직연금 · +32.57%/-2.38% · 매수시점 상이
+퇴직연금 내 21.10% 비중 핵심 종목. 장기 적립 관점에서 유지.
+
+**KODEX TRF5050 (329660)** — ISA 5주 · +23.67% · 거의 변동 없음
+주식·채권 5:5 방어형 상품. 비중 작으니 유지.
+
+**키움증권 (039490)** — ISA 5주 · -38.01% · 어제 +3.77%
+증시 거래대금 증가로 반등 시작 신호. 반등세 지속되면 저가 매수 후보, 손실폭 크니 소액 신중 접근.
+
+**네이버 (035420)** — ISA 6주 · +19.55% · 어제 +5.53%
+AI 파트너십 뉴스로 강세. 목표비중(3%) 대비 4.34%로 초과 상태 — 관망 또는 일부 수익 실현 고려.
+
+**기업은행 (024110)** — ISA 77주 · +46.73% · 어제 -1.72%
+배당주 성격, 꾸준한 종목. 유지.
+
+**SK텔레콤 (017670)** — ISA 13주 · +88.90%(최고 수익률) · 어제 -1.43%
+목표비중(3%)에 근접, 일부 익절도 합리적 선택.
+"""
+
+MARKET_BRIEFING_US = """
+**GOOGL (구글)** — 6주 · +39.50% · 어제 -1.17%
+목표비중(8%) 대비 5.73%로 부족. 버핏도 최근 크게 늘린 종목 — 분할 매수 우선순위.
+
+**QQQM (나스닥100 ETF)** — 12주 · +31.62% · 어제 -0.70%
+목표비중(20%) 대비 10.43%로 많이 부족. 꾸준히 채워나가기 좋은 종목.
+
+**AAPL (애플)** — 8주 · +34.66% · 어제 -1.75%
+목표비중(8%) 대비 7.23%로 거의 근접. 버핏 최대 보유 종목과 겹쳐 안심하고 유지.
+
+**NVDA (엔비디아)** — 2주 · +4.12% · 어제 -0.33%
+목표비중(5%) 대비 1.63%로 많이 부족. AI 반도체 대장주, 분할로 꾸준히 채우기 권장.
+
+**MSFT (마이크로소프트)** — 13주 · +24.34% · 어제 -0.47%
+미장 포트폴리오 내 최대 비중(19.66%). 퍼싱스퀘어 2위 종목과 방향 일치. 유지.
+
+**META (메타)** — 9주 · -9.38% · 어제 -0.04%
+⚠️ 가장 신경 써야 할 종목. 목표비중 7% 대비 실제 21.18%로 3배 초과. 물타기보다 지수 조정 시 비중 축소(일부 매도) 고려.
+
+**SPYM (S&P500 공격형)** — 24주 · +41.91% · 어제 -0.84%
+목표비중(12%) 대비 5.93%로 부족. 꾸준히 채우는 종목.
+
+**SCHD (배당 ETF)** — 42주 · +40.63% · 어제 -0.74%
+탐욕 구간에서 상대적으로 안전한 배당 자산. 유지.
+
+**SPYG (S&P500 방어형)** — 12주 · +26.57% · 어제 -0.70%
+목표비중(10%) 대비 4.44%로 부족. 꾸준히 채우는 종목.
+
+**ABBV (애브비)** — 5주 · +38.10% · 어제 -1.56%
+배당수익률 2.76%의 방어적 헬스케어 배당주. 유지.
+
+**O (리얼티인컴)** — 40주 · +16.07% · 어제 +0.35%
+배당수익률 5.24%로 포트폴리오 내 최고 배당주. 목표비중(5%) 대비 8.51%로 초과 — 추가 매수는 잠시 멈추고 관망.
+
+**MCD (맥도날드)** — 7주 · -1.90% · 어제 +0.63%
+목표비중(5%) 대비 7.50%로 초과 상태지만 안정적 배당주라 손실 크지 않아 유지.
+"""
+
+MARKET_BRIEFING_13F = """
+- **애플·구글·MS 겹침** — 버핏(애플 최대), 버핏(구글 대폭 확대), 퍼싱스퀘어(MS 2위)와 방향이 같은 안전한 축
+- **META 21% 집중은 나만의 리스크** — 유명 투자자 중 META 보유는 퍼싱스퀘어뿐이고, 그마저 소수 종목 중 하나. "따라 하기"가 아니라 "나만 갖고 있는 리스크"
+- **아마존(AMZN) 미보유** — 퍼싱스퀘어·애팔루사 둘 다 최상위 비중으로 보유 중인 종목. QQQM을 통한 간접 노출 외엔 없어 관심 가져볼 만한 공백
+- **ETF 분산 전략은 브리지워터와 유사** — 브리지워터는 SPY·IVV 최대 비중 + 997개 종목 분산. QQQM·SPYM·SPYG·RISE 시리즈 등 ETF 비중이 상당해 분산 철학은 이미 잘 하고 있는 편
+"""
+
+st.subheader("오늘의 시장 브리핑")
+
+anthropic_api_key = None
+if "app" in st.secrets and st.secrets["app"].get("anthropic_api_key"):
+    anthropic_api_key = st.secrets["app"]["anthropic_api_key"]
+
+briefing_key = date.today().isoformat()
+
+if not anthropic_api_key:
+    st.info(
+        "🔑 AI 자동 브리핑을 쓰려면 Anthropic API 키가 필요해요. "
+        "console.anthropic.com에서 발급받아 Secrets의 `[app] anthropic_api_key`에 추가하면, "
+        "여기서 '오늘의 브리핑 생성' 버튼이 나타나요. (호출마다 소액 과금됩니다.) "
+        "지금은 예시로 만들어드렸던 샘플 브리핑을 보여드릴게요."
+    )
+    with st.expander("① 시장 리뷰 (국장 vs 미장) · 공포탐욕지수 (예시, 2026-08-20 기준)", expanded=False):
+        st.markdown(MARKET_BRIEFING_INTRO)
+    with st.expander("② 국내 주식 포트폴리오 코멘트 (예시)", expanded=False):
+        st.markdown(MARKET_BRIEFING_KR)
+    with st.expander("③ 미국 주식 포트폴리오 코멘트 (예시)", expanded=False):
+        st.markdown(MARKET_BRIEFING_US)
+    with st.expander("④ 13F(버핏 등 큰손 보유현황) 비교 (예시)", expanded=False):
+        st.markdown(MARKET_BRIEFING_13F)
+else:
+    saved_briefing = None
+    if history_sheet_id:
+        try:
+            saved_briefing = history_store.load_text_snapshot(_get_gc_client(), history_sheet_id, "ai_briefings", briefing_key)
+        except Exception:
+            saved_briefing = None
+
+    col_gen, col_info = st.columns([1, 3])
+    with col_gen:
+        btn_label = "🔄 다시 생성" if saved_briefing else "✨ 오늘의 브리핑 생성"
+        generate_clicked = st.button(btn_label, disabled=not all_sig_rows_for_ai)
+    with col_info:
+        if saved_briefing:
+            st.caption(f"{briefing_key} 기준으로 이미 생성된 브리핑이에요. 저장돼있어서 새로고침해도 유지됩니다.")
+        elif not all_sig_rows_for_ai:
+            st.caption("보유 종목 데이터가 있어야 브리핑을 만들 수 있어요.")
+        else:
+            st.caption("웹 검색 + 종목 분석이라 생성에 10~30초 정도 걸려요.")
+
+    if generate_clicked:
+        try:
+            with st.spinner("오늘의 시장을 조사하고 포트폴리오와 비교하는 중... (10~30초 소요)"):
+                import ai_briefing
+                new_briefing = ai_briefing.generate_market_briefing(anthropic_api_key, all_sig_rows_for_ai)
+            saved_briefing = new_briefing
+            if history_sheet_id:
+                try:
+                    history_store.save_text_snapshot(_get_gc_client(), history_sheet_id, "ai_briefings", briefing_key, new_briefing)
+                except Exception:
+                    st.warning("브리핑은 생성됐지만 저장에는 실패했어요. 새로고침하면 사라질 수 있어요.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"브리핑 생성에 실패했어요: {e}")
+
+    if saved_briefing:
+        st.markdown(saved_briefing)
+    elif not generate_clicked:
+        st.info("아직 오늘의 브리핑이 없어요. 위 버튼을 눌러 생성해보세요.")
 
 st.caption("이 페이지는 열릴 때마다(최대 10분 캐시) 구글시트 최신 값을 다시 읽어옵니다.")
