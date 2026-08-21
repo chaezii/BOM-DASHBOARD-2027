@@ -12,8 +12,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from fetch_data import fetch_all
+from fetch_data import fetch_all, get_client
 from sheet_utils import to_number
+import history_store
 
 # ---------------------------------------------------------------------------
 # 설정: 목표
@@ -25,7 +26,7 @@ DEADLINE = date(2027, 12, 31)
 st.set_page_config(page_title="통합 자산 대시보드", page_icon="\U0001F4C8", layout="wide")
 
 
-@st.cache_data(ttl=600)  # 10분 캐시 - 너무 자주 시트를 읽지 않도록
+@st.cache_data(ttl=1800)  # 30분 캐시 - 구글시트 API 할당량(분당 요청 수)을 아끼기 위해
 def load_data(_sa_info_json: str, _history_sheet_id: str | None, debug: bool):
     sa_info = json.loads(_sa_info_json)
     return fetch_all(sa_info, history_sheet_id=_history_sheet_id, debug=debug)
@@ -91,16 +92,26 @@ if "app" in st.secrets and st.secrets["app"].get("history_sheet_id"):
 try:
     data = load_data(sa_info_json, history_sheet_id, debug_mode)
 except Exception as e:
-    st.error(f"구글시트 연결/파싱 중 오류가 발생했습니다: {e}")
-    st.info(
-        "시트를 서비스 계정 이메일과 공유했는지, sheet_utils의 라벨 검색이 "
-        "실제 시트 구조와 맞는지 확인하세요. 디버그 모드를 켜고 터미널 로그를 보세요."
-    )
+    err_text = str(e)
+    if "429" in err_text or "Quota exceeded" in err_text or "RESOURCE_EXHAUSTED" in err_text:
+        st.error("구글시트 API 요청이 순간적으로 너무 많이 몰렸어요 (분당 요청 한도 초과).")
+        st.info(
+            "**1분 정도 기다렸다가 새로고침**하면 대부분 해결돼요. "
+            "코드를 방금 바꾸셨다면(재배포 직후) 캐시가 초기화돼서 한 번에 많이 읽다가 발생한 걸 수 있어요 — "
+            "잠시 후 다시 열어보시면 그 다음부턴 30분 캐시 덕분에 잘 안 생깁니다."
+        )
+    else:
+        st.error(f"구글시트 연결/파싱 중 오류가 발생했습니다: {e}")
+        st.info(
+            "시트를 서비스 계정 이메일과 공유했는지, sheet_utils의 라벨 검색이 "
+            "실제 시트 구조와 맞는지 확인하세요. 디버그 모드를 켜고 터미널 로그를 보세요."
+        )
     st.stop()
 
 asset = data["asset"]
 stock = data["stock"]
 ledger = data["ledger"]
+current_ym = data.get("year_month") or date.today().strftime("%Y-%m")
 
 net_worth = asset.get("net_worth") or 0
 cash = asset.get("cash") or 0
@@ -189,6 +200,128 @@ if comp_items:
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("자산 구성 데이터를 찾지 못했습니다.")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 자산 계획 노트 (매달 5일 집행 예산/투자 배분 + 체크리스트)
+# ---------------------------------------------------------------------------
+st.subheader("자산 계획 노트")
+st.caption("매월 5일, 전월 정산 후 아래 계획대로 이체합니다. 체크하면 자동으로 기록됩니다.")
+
+PLAN_DEADLINE = "2027-12"
+CONSUMPTION_ITEMS = [
+    ("지연 후불", 1_000_000, ""),
+    ("수용 후불", 1_000_000, ""),
+    ("그 외 소비", 1_000_000, ""),
+    ("생활비", 800_000, ""),
+]
+INVEST_ITEMS = [
+    ("국내일반/미장 주식", 3_500_000, "한투 64209401-21 · 지연 운용, 월말 수용 보고"),
+    ("지연 ISA", 1_350_000, "NH 20802815046 · 자동이체로 지수거래"),
+    ("수용 ISA", 1_350_000, "KB 37349932601 · 자동이체로 지수거래"),
+    ("수용 주택청약통장", 250_000, "우리 1073115374810 · 매월 이체 (3년 후 다자녀 청약 도전)"),
+    ("지연 연금저축", 500_000, "NH 20802814978 · 세제 혜택"),
+]
+
+if not history_sheet_id:
+    st.info(
+        "체크 상태를 저장하려면 '기록용 시트'가 필요해요. 지금은 체크해도 새로고침하면 사라져요. "
+        "README '기록용 시트 만들기' 단계를 먼저 해주세요."
+    )
+
+
+@st.cache_resource
+def _get_gc_client():
+    return get_client(json.loads(sa_info_json))
+
+
+checklist_all = (
+    history_store.load_checklist(_get_gc_client(), history_sheet_id, "budget_checklist")
+    if history_sheet_id
+    else {}
+)
+this_month_checks = checklist_all.get(current_ym, {})
+
+
+def _on_toggle(item_key: str, widget_key: str):
+    if not history_sheet_id:
+        return
+    gc = _get_gc_client()
+    checked = st.session_state[widget_key]
+    history_store.upsert_checklist_item(gc, history_sheet_id, "budget_checklist", current_ym, item_key, checked)
+
+
+# --- 소비 예산 ---
+st.markdown("<div style='font-size:13px;font-weight:600;margin-top:8px;margin-bottom:6px;'>이번 달 소비 예산</div>", unsafe_allow_html=True)
+consumption_cols = st.columns(len(CONSUMPTION_ITEMS))
+total_consumption = 0
+for col, (name, amount, note) in zip(consumption_cols, CONSUMPTION_ITEMS):
+    item_key = f"소비_{name}"
+    widget_key = f"chk_{item_key}_{current_ym}"
+    total_consumption += amount
+    with col:
+        st.checkbox(
+            f"{name}  ({amount/10000:,.0f}만원)",
+            value=this_month_checks.get(item_key, False),
+            key=widget_key,
+            on_change=_on_toggle,
+            args=(item_key, widget_key),
+            disabled=not history_sheet_id,
+        )
+
+expected_income = 11_000_000
+expected_saving = expected_income - total_consumption
+st.markdown(
+    f"<div style='font-size:12px;color:#8a94a6;margin:6px 0 18px;'>"
+    f"예상 수입 {expected_income/10000:,.0f}만원 − 소비 {total_consumption/10000:,.0f}만원 "
+    f"= 저축 · 투자 가능액 약 <b style='color:#e8ecf1;'>{expected_saving/10000:,.0f}만원</b></div>",
+    unsafe_allow_html=True,
+)
+
+# --- 투자 배분 + 계좌별 이체 목표 ---
+st.markdown(f"<div style='font-size:13px;font-weight:600;margin-bottom:6px;'>월 적립식 투자 배분 (2027년 12월까지 목표)</div>", unsafe_allow_html=True)
+
+total_months = history_store.months_between_inclusive(current_ym, PLAN_DEADLINE)
+total_invest = sum(a for _, a, _ in INVEST_ITEMS)
+
+for name, amount, note in INVEST_ITEMS:
+    item_key = f"투자_{name}"
+    widget_key = f"chk_{item_key}_{current_ym}"
+
+    checked_months = sum(
+        1 for ym, items in checklist_all.items() if items.get(item_key)
+    )
+    target_total = amount * total_months
+    actual_total = amount * checked_months
+    progress = min(actual_total / target_total, 1.0) if target_total else 0.0
+
+    row1, row2 = st.columns([3, 1])
+    with row1:
+        st.markdown(
+            f"<div style='font-size:13.5px;font-weight:600;'>{name}"
+            f"<span style='color:#8a94a6;font-weight:400;font-size:12px;'> · {note}</span></div>",
+            unsafe_allow_html=True,
+        )
+        st.progress(progress, text=f"{amount/10000:,.0f}만원/월 · 지금까지 {checked_months}개월 이체 · "
+                                    f"{actual_total:,.0f}원 / 2027.12 목표 {target_total:,.0f}원 ({progress*100:.0f}%)")
+    with row2:
+        st.checkbox(
+            "이번 달 이체 완료",
+            value=this_month_checks.get(item_key, False),
+            key=widget_key,
+            on_change=_on_toggle,
+            args=(item_key, widget_key),
+            disabled=not history_sheet_id,
+        )
+
+st.markdown(
+    f"<div style='font-size:12px;color:#8a94a6;margin-top:4px;'>"
+    f"월 투자 배분 합계 {total_invest/10000:,.0f}만원 (계획 저축가능액 대비 {total_invest/expected_saving*100:.0f}%) · "
+    f"남은 개월수(당월 포함) {total_months}개월"
+    f"</div>",
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
@@ -505,6 +638,10 @@ if tickers:
 
                 df_t = pd.DataFrame(rows)
 
+                # 이 시장(예: 미국)의 모든 계좌 칸이 비어있으면 '계좌' 열 자체를 숨김
+                if df_t["계좌"].fillna("").eq("").all():
+                    df_t = df_t.drop(columns=["계좌"])
+
                 def _highlight_total(row):
                     is_total = row["종목명"] == "합계"
                     return ["font-weight: bold; border-top: 2px solid #8a94a6" if is_total else "" for _ in row]
@@ -546,24 +683,46 @@ if tickers:
         import market_data
         return market_data.fetch_technical_and_fundamental(market, code)
 
+    @st.cache_data(ttl=6 * 60 * 60)
+    def _load_usd_krw_rate():
+        import market_data
+        return market_data.fetch_usd_krw_rate()
+
     import market_data
+
+    usd_krw_rate = _load_usd_krw_rate()
 
     signal_tabs = st.tabs(markets)
     for tab, market in zip(signal_tabs, markets):
         with tab:
+            is_domestic = "국내" in market
+            # 국내가 아닌(=해외) 종목은 이동평균선이 달러 기준이라, 평단가/실시간가도 달러로 맞춰야
+            # 서로 비교(매수/매도 판단)가 맞고, 표에서도 단위가 안 헷갈려요.
+            use_usd = not is_domestic
+            if use_usd and not usd_krw_rate:
+                st.warning("환율 정보를 못 가져와서, 이 탭은 원화 기준으로 대신 표시합니다.")
+                use_usd = False
+
             with st.spinner(f"{market} 종목의 시세/재무 데이터를 불러오는 중..."):
                 sig_rows = []
                 for t in tickers:
                     if t["market"] != market:
                         continue
                     md = _load_market_data(t["market"], t["code"])
-                    signal = market_data.classify_signal(t["avg_buy_price"], t["price"], md["ma120"])
+
+                    avg_buy = t["avg_buy_price"]
+                    cur_price = t["price"]
+                    if use_usd and usd_krw_rate:
+                        avg_buy = (avg_buy / usd_krw_rate) if avg_buy is not None else None
+                        cur_price = (cur_price / usd_krw_rate) if cur_price is not None else None
+
+                    signal = market_data.classify_signal(avg_buy, cur_price, md["ma120"])
                     sig_rows.append(
                         {
                             "종목명": t["name"],
                             "계좌": t["account"],
-                            "구매평단가": t["avg_buy_price"],
-                            "실시간평단가": t["price"],
+                            "구매평단가": avg_buy,
+                            "실시간평단가": cur_price,
                             "60일 이평선": md["ma60"],
                             "120일 이평선": md["ma120"],
                             "기업매출": md["revenue"],
@@ -576,6 +735,9 @@ if tickers:
             if sig_rows:
                 df_sig = pd.DataFrame(sig_rows)
 
+                if df_sig["계좌"].fillna("").eq("").all():
+                    df_sig = df_sig.drop(columns=["계좌"])
+
                 def _signal_color(row):
                     colors = {
                         "매수 고려": "color:#34d8b0;font-weight:600;",
@@ -585,13 +747,14 @@ if tickers:
                     style = colors.get(row["판단"], "")
                     return ["" if col != "판단" else style for col in row.index]
 
+                price_fmt = "${:,.2f}" if use_usd else "{:,.0f}원"
                 st.dataframe(
                     df_sig.style.apply(_signal_color, axis=1).format(
                         {
-                            "구매평단가": "{:,.0f}원",
-                            "실시간평단가": "{:,.0f}원",
-                            "60일 이평선": "{:,.0f}원",
-                            "120일 이평선": "{:,.0f}원",
+                            "구매평단가": price_fmt,
+                            "실시간평단가": price_fmt,
+                            "60일 이평선": price_fmt,
+                            "120일 이평선": price_fmt,
                             "기업매출": "{:,.0f}",
                             "순이익": "{:,.0f}",
                             "성장률": "{:.1f}%",
@@ -601,6 +764,8 @@ if tickers:
                     use_container_width=True,
                     hide_index=True,
                 )
+                if use_usd:
+                    st.caption(f"이 탭은 전부 달러($) 기준이에요. (환율 1USD ≈ {usd_krw_rate:,.0f}원 적용)")
     st.caption(
         "60일/120일 이평선과 재무데이터는 야후 파이낸스 무료 데이터라 비어있거나 다소 부정확할 수 있어요. "
         "국내 종목은 코스피(.KS)/코스닥(.KQ)을 자동으로 시도해서 찾습니다."
