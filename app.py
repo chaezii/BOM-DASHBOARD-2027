@@ -210,18 +210,25 @@ st.subheader("자산 계획 노트")
 st.caption("매월 5일, 전월 정산 후 아래 계획대로 이체합니다. 체크하면 자동으로 기록됩니다.")
 
 PLAN_DEADLINE = "2027-12"
-CONSUMPTION_ITEMS = [
-    ("지연 후불", 1_000_000, ""),
-    ("수용 후불", 1_000_000, ""),
-    ("그 외 소비", 1_000_000, ""),
-    ("생활비", 800_000, ""),
+
+# 소비관리 탭(Eat/Live/Wear/Enjoy/Edu/Ride/Other)과 동일한 카테고리의 월 지출 목표
+SPENDING_TARGETS = [
+    ("Eat", "먹고 마시는 모든 지출", 900_000),
+    ("Live", "주거와 생활 관련 모든 지출", 2_158_333),
+    ("Wear", "입고 꾸미는 모든 지출", 300_000),
+    ("Enjoy", "문화·여행 등 즐기는 지출", 500_000),
+    ("Edu", "교육과 자녀 관련 지출", 100_000),
+    ("Ride", "교통 관련 지출", 200_000),
+    ("Other", "기타 지출", 300_000),
 ]
+SPENDING_TARGET_TOTAL = 4_500_000  # 사용자가 지정한 공식 목표 총액 (개별 합산 4,458,333과 소폭 차이)
+
 INVEST_ITEMS = [
-    ("국내일반/미장 주식", 3_500_000, "한투 64209401-21 · 지연 운용, 월말 수용 보고"),
-    ("지연 ISA", 1_350_000, "NH 20802815046 · 자동이체로 지수거래"),
-    ("수용 ISA", 1_350_000, "KB 37349932601 · 자동이체로 지수거래"),
-    ("수용 주택청약통장", 250_000, "우리 1073115374810 · 매월 이체 (3년 후 다자녀 청약 도전)"),
-    ("지연 연금저축", 500_000, "NH 20802814978 · 세제 혜택"),
+    ("국내일반/미장 주식", 3_500_000, "한투", "64209401-21", "지연 운용 · 월말 수용 보고"),
+    ("지연 ISA", 1_350_000, "NH", "20802815046", "자동이체로 지수거래"),
+    ("수용 ISA", 1_350_000, "KB", "37349932601", "자동이체로 지수거래"),
+    ("수용 주택청약통장", 250_000, "우리", "1073115374810", "3년 후 다자녀 청약 도전"),
+    ("지연 연금저축", 500_000, "NH", "20802814978", "세제 혜택"),
 ]
 
 if not history_sheet_id:
@@ -264,77 +271,131 @@ def _on_toggle(item_key: str, widget_key: str):
         st.toast("⚠️ 체크 저장에 실패했어요. 잠시 후 다시 시도해주세요.", icon="⚠️")
 
 
-# --- 소비 예산 ---
-st.markdown("<div style='font-size:13px;font-weight:600;margin-top:8px;margin-bottom:6px;'>이번 달 소비 예산</div>", unsafe_allow_html=True)
-consumption_cols = st.columns(len(CONSUMPTION_ITEMS))
-total_consumption = 0
-for col, (name, amount, note) in zip(consumption_cols, CONSUMPTION_ITEMS):
-    item_key = f"소비_{name}"
-    widget_key = f"chk_{item_key}_{current_ym}"
-    total_consumption += amount
-    with col:
-        st.checkbox(
-            f"{name}  ({amount/10000:,.0f}만원)",
-            value=this_month_checks.get(item_key, False),
-            key=widget_key,
-            on_change=_on_toggle,
-            args=(item_key, widget_key),
-            disabled=not history_sheet_id,
+# --- 이번 달 지출 목표 (소비관리 탭 카테고리와 동일 기준) ---
+st.markdown(
+    "<div style='font-size:13px;font-weight:600;margin-top:10px;margin-bottom:10px;'>① 이번 달 지출 목표</div>",
+    unsafe_allow_html=True,
+)
+budget_cols = st.columns(4)
+for i, (cat, desc, target) in enumerate(SPENDING_TARGETS):
+    with budget_cols[i % 4]:
+        st.markdown(
+            f"""
+            <div style="background:#161c26;border:1px solid #232b36;border-radius:10px;
+                        padding:10px 12px;margin-bottom:10px;min-height:78px;">
+              <div style="font-size:12.5px;font-weight:600;color:#e8ecf1;">{cat}</div>
+              <div style="font-size:10.5px;color:#8a94a6;margin-bottom:6px;line-height:1.3;">{desc}</div>
+              <div style="font-size:14px;font-weight:600;color:#5b9dff;font-family:'IBM Plex Mono',monospace;">
+                {target:,.0f}원
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
 expected_income = 11_000_000
-expected_saving = expected_income - total_consumption
+expected_saving = expected_income - SPENDING_TARGET_TOTAL
 st.markdown(
-    f"<div style='font-size:12px;color:#8a94a6;margin:6px 0 18px;'>"
-    f"예상 수입 {expected_income/10000:,.0f}만원 − 소비 {total_consumption/10000:,.0f}만원 "
-    f"= 저축 · 투자 가능액 약 <b style='color:#e8ecf1;'>{expected_saving/10000:,.0f}만원</b></div>",
+    f"<div style='font-size:12px;color:#8a94a6;margin:2px 0 4px;'>"
+    f"지출 목표 합계 <b style='color:#e8ecf1;'>{SPENDING_TARGET_TOTAL:,.0f}원</b> · "
+    f"예상 수입 {expected_income:,.0f}원 − 지출목표 {SPENDING_TARGET_TOTAL:,.0f}원 "
+    f"= 저축·투자 가능액 약 <b style='color:#34d8b0;'>{expected_saving:,.0f}원</b>"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+st.caption(
+    "실제로 목표를 지켰는지는 아래 '소비관리 · 카테고리별 지출' 섹션에서 이번 달 실적과 자동으로 비교해서 보여줘요."
+)
+
+st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+# --- 월 적립식 투자 배분 (카드형 UI) ---
+st.markdown(
+    "<div style='font-size:13px;font-weight:600;margin-bottom:10px;'>② 월 적립식 투자 배분 (2027년 12월까지 목표)</div>",
     unsafe_allow_html=True,
 )
 
-# --- 투자 배분 + 계좌별 이체 목표 ---
-st.markdown(f"<div style='font-size:13px;font-weight:600;margin-bottom:6px;'>월 적립식 투자 배분 (2027년 12월까지 목표)</div>", unsafe_allow_html=True)
-
 total_months = history_store.months_between_inclusive(current_ym, PLAN_DEADLINE)
-total_invest = sum(a for _, a, _ in INVEST_ITEMS)
+total_invest = sum(a for _, a, _, _, _ in INVEST_ITEMS)
 
-for name, amount, note in INVEST_ITEMS:
+for name, amount, bank, acct_no, note in INVEST_ITEMS:
     item_key = f"투자_{name}"
     widget_key = f"chk_{item_key}_{current_ym}"
 
-    checked_months = sum(
-        1 for ym, items in checklist_all.items() if items.get(item_key)
-    )
+    checked_months = sum(1 for ym, items in checklist_all.items() if items.get(item_key))
     target_total = amount * total_months
     actual_total = amount * checked_months
     progress = min(actual_total / target_total, 1.0) if target_total else 0.0
+    is_done = this_month_checks.get(item_key, False)
 
-    row1, row2 = st.columns([3, 1])
-    with row1:
+    with st.container(border=True):
+        c1, c2 = st.columns([3, 1.1])
+        with c1:
+            st.markdown(
+                f"""
+                <div style="font-size:15px;font-weight:700;color:#e8ecf1;margin-bottom:4px;">{name}</div>
+                <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+                  <span style="background:#232b36;color:#8a94a6;font-size:11px;padding:2px 8px;
+                               border-radius:20px;font-family:'IBM Plex Mono',monospace;">{bank}</span>
+                  <span style="color:#8a94a6;font-size:12px;font-family:'IBM Plex Mono',monospace;">{acct_no}</span>
+                </div>
+                <div style="font-size:11.5px;color:#5b9dff;margin-bottom:10px;">{note}</div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                f"""
+                <div style="text-align:right;font-size:20px;font-weight:700;color:#e8ecf1;
+                            font-family:'IBM Plex Mono',monospace;margin-bottom:6px;">
+                  {amount/10000:,.0f}만원<span style="font-size:11px;color:#8a94a6;font-weight:400;">/월</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.checkbox(
+                "이번 달 이체 완료",
+                value=is_done,
+                key=widget_key,
+                on_change=_on_toggle,
+                args=(item_key, widget_key),
+                disabled=not history_sheet_id,
+            )
+
+        bar_color = "#34d8b0" if is_done else "#5b9dff"
         st.markdown(
-            f"<div style='font-size:13.5px;font-weight:600;'>{name}"
-            f"<span style='color:#8a94a6;font-weight:400;font-size:12px;'> · {note}</span></div>",
+            f"""
+            <div style="margin-top:2px;">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:#8a94a6;margin-bottom:4px;">
+                <span>누적 {checked_months}개월 · {actual_total:,.0f}원</span>
+                <span>2027.12 목표 {target_total:,.0f}원 · {progress*100:.0f}%</span>
+              </div>
+              <div style="background:#232b36;border-radius:6px;height:8px;overflow:hidden;">
+                <div style="background:{bar_color};width:{progress*100:.1f}%;height:100%;"></div>
+              </div>
+            </div>
+            """,
             unsafe_allow_html=True,
-        )
-        st.progress(progress, text=f"{amount/10000:,.0f}만원/월 · 지금까지 {checked_months}개월 이체 · "
-                                    f"{actual_total:,.0f}원 / 2027.12 목표 {target_total:,.0f}원 ({progress*100:.0f}%)")
-    with row2:
-        st.checkbox(
-            "이번 달 이체 완료",
-            value=this_month_checks.get(item_key, False),
-            key=widget_key,
-            on_change=_on_toggle,
-            args=(item_key, widget_key),
-            disabled=not history_sheet_id,
         )
 
 _saving_pct = (total_invest / expected_saving * 100) if expected_saving else 0
 st.markdown(
-    f"<div style='font-size:12px;color:#8a94a6;margin-top:4px;'>"
-    f"월 투자 배분 합계 {total_invest/10000:,.0f}만원 (계획 저축가능액 대비 {_saving_pct:.0f}%) · "
-    f"남은 개월수(당월 포함) {total_months}개월"
+    f"<div style='font-size:12px;color:#8a94a6;margin-top:10px;'>"
+    f"월 투자 배분 합계 <b style='color:#e8ecf1;'>{total_invest:,.0f}원</b> "
+    f"(계획 저축가능액 대비 {_saving_pct:.0f}%) · 남은 개월수(당월 포함) {total_months}개월"
     f"</div>",
     unsafe_allow_html=True,
 )
+
+with st.expander("📋 소비관리 탭에 직접 붙여넣을 '목표' 수식 (선택)"):
+    st.caption(
+        "서비스 계정은 자산현황 시트에 '읽기' 권한만 있어서, 저희가 직접 시트에 써넣을 수는 없어요. "
+        "대신 아래 값을 소비관리 탭에 '목표' 행으로 직접 추가해서 붙여넣으시면, "
+        "26.08~27.12까지 매달 같은 목표가 채워집니다 (지출 목표는 매달 고정이라 전부 같은 값이에요)."
+    )
+    target_row = "목표\t" + "\t".join(f"{t:,.0f}" for _, _, t in SPENDING_TARGETS)
+    st.code(target_row, language=None)
+    st.caption("이 줄을 복사해서 카테고리 행들(Eat/Live/…) 아래에 새 행으로 붙여넣고, 오른쪽으로 월별 칸까지 드래그해서 채우면 돼요.")
 
 st.divider()
 
@@ -349,6 +410,7 @@ if not history_sheet_id:
     )
 
 asset_items = asset.get("items", {})
+liability_items = asset.get("liability_items", {})
 asset_prev = data.get("asset_prev_items", {})
 
 if asset_items:
@@ -358,6 +420,7 @@ if asset_items:
         delta = (cur_val - prev_val) if (prev_val is not None) else None
         rows.append(
             {
+                "구분": "자산",
                 "항목": name,
                 "이번 달": cur_val,
                 "지난달": prev_val if prev_val is not None else None,
@@ -365,33 +428,91 @@ if asset_items:
             }
         )
 
-    total_cur = sum(r["이번 달"] for r in rows)
-    total_prev_vals = [r["지난달"] for r in rows if r["지난달"] is not None]
-    total_prev = sum(total_prev_vals) if len(total_prev_vals) == len(rows) else None
-    total_delta = (total_cur - total_prev) if total_prev is not None else None
+    total_asset_cur = sum(r["이번 달"] for r in rows)
+    total_asset_prev_vals = [r["지난달"] for r in rows if r["지난달"] is not None]
+    total_asset_prev = sum(total_asset_prev_vals) if len(total_asset_prev_vals) == len(rows) else None
     rows.append(
         {
-            "항목": "합계",
-            "이번 달": total_cur,
-            "지난달": total_prev,
-            "증감": total_delta,
+            "구분": "자산",
+            "항목": "자산 합계",
+            "이번 달": total_asset_cur,
+            "지난달": total_asset_prev,
+            "증감": (total_asset_cur - total_asset_prev) if total_asset_prev is not None else None,
+        }
+    )
+
+    total_liability_cur = 0
+    total_liability_prev = None
+    if liability_items:
+        liab_prev_vals = []
+        for name, cur_val in liability_items.items():
+            prev_val = asset_prev.get(name)
+            delta = (cur_val - prev_val) if (prev_val is not None) else None
+            rows.append(
+                {
+                    "구분": "부채",
+                    "항목": name,
+                    "이번 달": -cur_val,
+                    "지난달": (-prev_val if prev_val is not None else None),
+                    "증감": (-delta if delta is not None else None),
+                }
+            )
+            total_liability_cur += cur_val
+            liab_prev_vals.append(prev_val)
+        total_liability_prev = sum(liab_prev_vals) if all(v is not None for v in liab_prev_vals) else None
+        rows.append(
+            {
+                "구분": "부채",
+                "항목": "부채 합계",
+                "이번 달": -total_liability_cur,
+                "지난달": (-total_liability_prev if total_liability_prev is not None else None),
+                "증감": (-(total_liability_cur - total_liability_prev) if total_liability_prev is not None else None),
+            }
+        )
+    else:
+        # 부채 상세 항목을 못 찾았으면, asset 요약에 있는 부채 총액이라도 사용
+        fallback_debt = asset.get("total_debt")
+        if fallback_debt:
+            total_liability_cur = fallback_debt
+            rows.append(
+                {"구분": "부채", "항목": "부채 합계", "이번 달": -fallback_debt, "지난달": None, "증감": None}
+            )
+
+    net_worth_cur = total_asset_cur - total_liability_cur
+    net_worth_prev = (
+        (total_asset_prev - total_liability_prev)
+        if (total_asset_prev is not None and total_liability_prev is not None)
+        else None
+    )
+    rows.append(
+        {
+            "구분": "순자산",
+            "항목": "순자산 (자산 − 부채)",
+            "이번 달": net_worth_cur,
+            "지난달": net_worth_prev,
+            "증감": (net_worth_cur - net_worth_prev) if net_worth_prev is not None else None,
         }
     )
 
     df_assets = pd.DataFrame(rows)
 
     def _highlight_total(row):
-        is_total = row["항목"] == "합계"
-        return ["font-weight: bold; border-top: 2px solid #8a94a6" if is_total else "" for _ in row]
+        if row["항목"] == "순자산 (자산 − 부채)":
+            return ["font-weight: bold; border-top: 3px double #d4af37; color:#d4af37;" for _ in row]
+        if row["항목"] in ("자산 합계", "부채 합계"):
+            return ["font-weight: bold; border-top: 2px solid #8a94a6" for _ in row]
+        return ["" for _ in row]
 
     st.dataframe(
-        df_assets.style.apply(_highlight_total, axis=1).format(
-            {"이번 달": "{:,.0f}원", "지난달": "{:,.0f}원", "증감": "{:+,.0f}원"},
+        df_assets.drop(columns=["구분"]).style.apply(_highlight_total, axis=1).format(
+            {"이번 달": "{:+,.0f}원", "지난달": "{:+,.0f}원", "증감": "{:+,.0f}원"},
             na_rep="—",
         ),
         use_container_width=True,
         hide_index=True,
     )
+    if not liability_items and not asset.get("total_debt"):
+        st.caption("⚠️ 부채 항목을 찾지 못해서 순자산에 부채가 반영되지 않았을 수 있어요. 디버그 모드로 확인해보세요.")
     if not asset_prev:
         st.caption("아직 지난달 기록이 없어서 증감이 비어있어요. 다음 달부터 채워집니다.")
 else:
@@ -482,10 +603,37 @@ if has_spending_data:
     )
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Eat·Live·Wear·Enjoy·Edu·Ride·Other 카테고리별 지출을 월별로 쌓아서 보여줘요.")
+
+    # --- 이번 달 실적 vs 목표(자산 계획 노트에서 정한 값) 비교 ---
+    st.markdown("<div style='font-size:13px;font-weight:600;margin-top:14px;margin-bottom:8px;'>이번 달 목표 대비 실적</div>", unsafe_allow_html=True)
+    target_map = {cat: target for cat, _, target in SPENDING_TARGETS}
+    this_month_label = sp_months[-1] if sp_months else None
+    compare_rows = []
+    for cat, monthly_vals in sp_categories.items():
+        actual = monthly_vals[-1] if monthly_vals else 0
+        target = target_map.get(cat)
+        if target:
+            diff = actual - target
+            compare_rows.append({"카테고리": cat, "목표": target, "실적": actual, "차이": diff, "달성률": actual / target * 100})
+    if compare_rows:
+        df_cmp = pd.DataFrame(compare_rows)
+
+        def _over_budget(row):
+            color = "#ff6b6b" if row["차이"] > 0 else "#34d8b0"
+            return ["", "", "", f"color:{color};font-weight:600;", f"color:{color};"]
+
+        st.dataframe(
+            df_cmp.style.apply(_over_budget, axis=1).format(
+                {"목표": "{:,.0f}원", "실적": "{:,.0f}원", "차이": "{:+,.0f}원", "달성률": "{:.0f}%"}
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(f"기준: {this_month_label or '이번 달'} 실적 (빨강=목표 초과, 초록=목표 이내)")
 else:
     st.info(
         "소비관리 탭이 아직 비어있어요. 시트에 카테고리별 지출이 채워지면 "
-        "이 자리에 자동으로 그래프가 나타납니다 (코드 수정 필요 없음)."
+        "이 자리에 자동으로 그래프와 목표 대비 실적이 나타납니다 (코드 수정 필요 없음)."
     )
 
 st.divider()
@@ -686,8 +834,8 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("종목별 매수 · 보류 · 매도 판단")
 st.caption(
-    "⚠️ 투자 조언이 아니라 아래 규칙에 따른 단순 계산 결과입니다. "
-    "매수 고려: 실시간가 ≤ 120일 이평선 · 매도 고려: 평단가 대비 -20% 이하 · 그 외 전부: 보류"
+    "⚠️ 투자 조언이 아니라 아래 규칙에 따른 단순 계산 결과입니다. 장기 가치투자 관점(워런 버핏/찰리 멍거 식)을 참고했어요 — "
+    "가격이 조금 움직였다고 바로 사고팔지 않고, ①목표비중 대비 실제비중 ②흑자 여부(BEP) ③저평가 구간(120일 이평선) ④밸류에이션(PER) ⑤재무건전성(부채비율)을 같이 봅니다."
 )
 
 if tickers:
@@ -718,6 +866,7 @@ if tickers:
 
             with st.spinner(f"{market} 종목의 시세/재무 데이터를 불러오는 중..."):
                 sig_rows = []
+                reasons_map = {}
                 for t in tickers:
                     if t["market"] != market:
                         continue
@@ -729,7 +878,16 @@ if tickers:
                         avg_buy = (avg_buy / usd_krw_rate) if avg_buy is not None else None
                         cur_price = (cur_price / usd_krw_rate) if cur_price is not None else None
 
-                    signal = market_data.classify_signal(avg_buy, cur_price, md["ma120"])
+                    result = market_data.classify_signal(
+                        avg_buy, cur_price, md["ma120"],
+                        target_weight_pct=t.get("target_weight_pct"),
+                        current_weight_pct=t.get("current_weight_pct"),
+                        is_profitable=md.get("is_profitable"),
+                        pe_ratio=md.get("pe_ratio"),
+                        debt_to_equity=md.get("debt_to_equity"),
+                    )
+                    bep_label = {True: "흑자", False: "적자", None: "—"}[md.get("is_profitable")]
+                    reasons_map[t["name"]] = result["reasons"]
                     sig_rows.append(
                         {
                             "종목명": t["name"],
@@ -738,10 +896,13 @@ if tickers:
                             "실시간평단가": cur_price,
                             "60일 이평선": md["ma60"],
                             "120일 이평선": md["ma120"],
-                            "기업매출": md["revenue"],
-                            "순이익": md["net_income"],
-                            "성장률": md["revenue_growth_pct"],
-                            "판단": signal,
+                            "목표비중": t.get("target_weight_pct"),
+                            "현재비중": t.get("current_weight_pct"),
+                            "BEP": bep_label,
+                            "PER": md.get("pe_ratio"),
+                            "ROE": md.get("roe_pct"),
+                            "부채비율": md.get("debt_to_equity"),
+                            "판단": result["signal"],
                         }
                     )
 
@@ -757,8 +918,16 @@ if tickers:
                         "매도 고려": "color:#ff6b6b;font-weight:600;",
                         "보류": "color:#d4af37;font-weight:600;",
                     }
-                    style = colors.get(row["판단"], "")
-                    return ["" if col != "판단" else style for col in row.index]
+                    bep_colors = {"흑자": "color:#34d8b0;", "적자": "color:#ff6b6b;"}
+                    styles = []
+                    for col in row.index:
+                        if col == "판단":
+                            styles.append(colors.get(row["판단"], ""))
+                        elif col == "BEP":
+                            styles.append(bep_colors.get(row["BEP"], ""))
+                        else:
+                            styles.append("")
+                    return styles
 
                 price_fmt = "${:,.2f}" if use_usd else "{:,.0f}원"
                 st.dataframe(
@@ -768,20 +937,25 @@ if tickers:
                             "실시간평단가": price_fmt,
                             "60일 이평선": price_fmt,
                             "120일 이평선": price_fmt,
-                            "기업매출": "{:,.0f}",
-                            "순이익": "{:,.0f}",
-                            "성장률": "{:.1f}%",
+                            "목표비중": "{:.1f}%",
+                            "현재비중": "{:.1f}%",
+                            "PER": "{:.1f}배",
+                            "ROE": "{:.1f}%",
+                            "부채비율": "{:.0f}%",
                         },
                         na_rep="—",
                     ),
                     use_container_width=True,
                     hide_index=True,
                 )
+                with st.expander("종목별 판단 근거 보기"):
+                    for name, reasons in reasons_map.items():
+                        st.markdown(f"**{name}** — {' / '.join(reasons)}")
                 if use_usd:
                     st.caption(f"이 탭은 전부 달러($) 기준이에요. (환율 1USD ≈ {usd_krw_rate:,.0f}원 적용)")
     st.caption(
-        "60일/120일 이평선과 재무데이터는 야후 파이낸스 무료 데이터라 비어있거나 다소 부정확할 수 있어요. "
-        "국내 종목은 코스피(.KS)/코스닥(.KQ)을 자동으로 시도해서 찾습니다."
+        "이평선·재무지표는 야후 파이낸스 무료 데이터라 비어있거나 다소 부정확할 수 있어요. "
+        "목표비중은 주식 포트폴리오 시트의 '목표 비중' 열을 그대로 가져온 값이에요 (없으면 '—')."
     )
 else:
     st.info("종목 데이터가 없어서 판단표를 만들 수 없습니다.")
