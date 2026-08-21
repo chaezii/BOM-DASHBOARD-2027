@@ -1,16 +1,13 @@
 """
 market_data.py
-구글시트에 없는 데이터(이동평균선, 재무 건전성 지표)를 야후 파이낸스(yfinance)에서 가져옵니다.
+구글시트에 없는 데이터(60일/120일 이동평균)를 야후 파이낸스(yfinance)에서 가져옵니다.
 
 ⚠️ 참고
 - 무료 데이터라 가끔 값이 비어있거나 부정확할 수 있어요.
 - 국내 종목은 종목코드에 .KS(코스피) / .KQ(코스닥)를 붙여서 찾는데, 100% 정확하진 않습니다.
 - 이 파일의 매수/보류/매도 판단은 투자 조언이 아니라, 아래 규칙에 따른 단순 계산 결과입니다.
-- 장기 가치투자(워런 버핏/찰리 멍거 식) 관점을 참고해서 규칙을 짰습니다:
-  가격이 조금 떨어졌다고 무조건 사거나, 조금 올랐다고 무조건 파는 게 아니라
-  '이 회사가 돈을 벌고 있는가(BEP)', '너무 비싸게 사는 건 아닌가(PER)',
-  '빚이 과하진 않은가(부채비율)', '내가 원래 배분하려던 비중보다 많이/적게 들고 있는가'를
-  같이 봅니다.
+- 3년 전저점/전고점은 야후 파이낸스에서 빈 값으로 오는 경우가 많아서 판단 기준에서 뺐습니다.
+  대신 항상 채워지는 값들(시트의 수익률, 60일/120일 이평선, 목표비중)만 기준으로 씁니다.
 """
 
 from __future__ import annotations
@@ -31,24 +28,18 @@ def resolve_yahoo_symbol(market: str, code: str) -> list[str]:
 
 
 def fetch_technical_and_fundamental(market: str, code: str) -> dict:
-    """이동평균선 + 장기투자 판단에 쓸 재무 건전성 지표를 가져옴.
+    """60일/120일 이동평균 종가를 가져옴.
     실패하면 해당 항목만 None으로 채워서 반환 (에러로 전체가 죽지 않게)."""
     result = {
         "ma60": None,
         "ma120": None,
-        "is_profitable": None,       # BEP(손익분기점) 통과 여부 - 순이익이 흑자인가
-        "pe_ratio": None,            # PER - 너무 비싸게 사는 건 아닌지
-        "roe_pct": None,             # 자기자본이익률 - 돈을 잘 버는 우량 기업인지
-        "debt_to_equity": None,      # 부채비율 - 재무구조가 건전한지
-        "week52_high": None,
-        "drawdown_from_high_pct": None,  # 52주 고점 대비 몇 % 하락했는지
         "resolved_symbol": None,
     }
 
     for symbol in resolve_yahoo_symbol(market, code):
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="260d")
+            hist = ticker.history(period="200d")  # 120일 이평선 계산에 필요한 만큼만 (3y보다 가볍고 빠름)
             if hist is None or hist.empty or "Close" not in hist:
                 continue
 
@@ -59,28 +50,6 @@ def fetch_technical_and_fundamental(market: str, code: str) -> dict:
                 result["ma120"] = float(closes.tail(120).mean())
             elif len(closes) >= 20:
                 result["ma120"] = float(closes.mean())  # 상장 얼마 안 된 종목 등 대체값
-
-            if len(closes):
-                week52_high = float(closes.max())
-                last_price = float(closes.iloc[-1])
-                result["week52_high"] = week52_high
-                if week52_high:
-                    result["drawdown_from_high_pct"] = (last_price - week52_high) / week52_high * 100
-
-            try:
-                info = ticker.get_info()
-            except Exception:
-                info = {}
-
-            net_income = info.get("netIncomeToCommon")
-            if net_income is not None:
-                result["is_profitable"] = net_income > 0
-
-            result["pe_ratio"] = info.get("trailingPE")
-            roe = info.get("returnOnEquity")
-            result["roe_pct"] = (roe * 100) if roe is not None else None
-            dte = info.get("debtToEquity")
-            result["debt_to_equity"] = dte  # yfinance는 보통 %단위(예: 45.2)로 줌
 
             result["resolved_symbol"] = symbol
             break  # 성공한 심볼을 찾았으면 다음 후보는 시도하지 않음
@@ -103,78 +72,103 @@ def fetch_usd_krw_rate() -> float | None:
     return None
 
 
+def _safe_float(v):
+    """None/문자열/NaN 등을 안전하게 float로, 실패하면 None."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f:  # NaN 체크 (NaN은 자기 자신과도 같지 않음)
+        return None
+    return f
+
+
 def classify_signal(
-    avg_buy_price,
+    return_pct,
     current_price,
+    ma60,
     ma120,
     target_weight_pct=None,
     current_weight_pct=None,
-    is_profitable=None,
-    pe_ratio=None,
-    debt_to_equity=None,
 ) -> dict:
     """
-    장기 가치투자 관점의 매수/보류/매도 판단. {"signal": "...", "reasons": [...]} 반환.
+    시트 수익률 · 60일/120일 이동평균선 · 목표비중만으로 판단.
+    {"signal": "...", "reasons": [...]} 반환.
 
-    매수 고려 (아래 조건을 최대한 많이 만족할수록 근거가 탄탄함):
-      - 필수: 현재비중 < 목표비중 (아직 배분 목표만큼 못 채움 - 더 살 여지가 있음)
-      - 필수: 적자 기업이 아님 (BEP 통과, 정보 없으면 통과로 간주)
-      - 가산: 실시간가 ≤ 120일 이동평균선 (저가 매수 타이밍)
-      - 가산: PER이 지나치게 높지 않음 (< 40, 정보 있을 때만 체크)
+    매수 고려 (아래 2가지를 전부 만족할 때만 - AND):
+      - 현재비중 < 목표비중 (아직 배분 목표만큼 못 채움)
+      - 실시간가 ≤ 60일 이동평균선 AND 실시간가 ≤ 120일 이동평균선 (둘 다 아래 - 확실한 조정 구간)
 
-    매도 고려 (재무가 흔들리거나, 원래 배분보다 너무 많이 쌓였을 때만):
-      - 적자 기업 + 평단가 대비 -20% 이상 하락 (펀더멘털도 깨지고 가격도 깨짐)
-      - 또는 현재비중이 목표비중의 1.5배를 초과 (리밸런싱 필요)
-      - 또는 부채비율이 200%를 초과 + 적자 (재무 위험 신호)
+    매도 고려 (아래 중 하나라도 해당하면 - OR):
+      - 수익률(시트 기준) -30% 이하
+      - 현재비중이 목표비중의 1.5배 초과
 
-    보류 : 위 조건에 해당하지 않는 나머지 전부 (기본값 - 우량주는 어지간해선 계속 보유)
+    보류 : 위 두 경우가 아닌 나머지 전부 (기본값)
+
+    ⚠️ 값이 이상하게 들어와도(문자열 섞임, NaN 등) 절대 에러를 던지지 않고
+    안전하게 "—"(판단 불가)를 반환합니다.
     """
+    try:
+        return _classify_signal_inner(
+            return_pct, current_price, ma60, ma120,
+            target_weight_pct, current_weight_pct,
+        )
+    except Exception as e:
+        return {"signal": "—", "reasons": [f"판단 계산 중 오류 ({type(e).__name__})"]}
+
+
+def _classify_signal_inner(
+    return_pct,
+    current_price,
+    ma60,
+    ma120,
+    target_weight_pct,
+    current_weight_pct,
+) -> dict:
+    return_pct = _safe_float(return_pct)
+    current_price = _safe_float(current_price)
+    ma60 = _safe_float(ma60)
+    ma120 = _safe_float(ma120)
+    target_weight_pct = _safe_float(target_weight_pct)
+    current_weight_pct = _safe_float(current_weight_pct)
+
+    if return_pct is None:
+        return {"signal": "—", "reasons": ["수익률 정보 부족"]}
+
+    has_weight_info = target_weight_pct is not None and current_weight_pct is not None
+    has_room_to_buy = has_weight_info and current_weight_pct < target_weight_pct
+    overweight = has_weight_info and target_weight_pct > 0 and current_weight_pct > target_weight_pct * 1.5
+
+    below_ma60 = ma60 is not None and current_price is not None and current_price <= ma60
+    below_ma120 = ma120 is not None and current_price is not None and current_price <= ma120
+    is_dip = below_ma60 and below_ma120  # 60일선·120일선 둘 다 아래 - 확실한 조정 구간
+
     reasons = []
 
-    if avg_buy_price is None or current_price is None or avg_buy_price == 0:
-        return {"signal": "—", "reasons": ["평단가/현재가 정보 부족"]}
-
-    has_room_to_buy = (
-        target_weight_pct is not None
-        and current_weight_pct is not None
-        and current_weight_pct < target_weight_pct
-    )
-    overweight = (
-        target_weight_pct is not None
-        and current_weight_pct is not None
-        and target_weight_pct > 0
-        and current_weight_pct > target_weight_pct * 1.5
-    )
-    not_unprofitable = is_profitable is not False  # None(정보없음)은 통과로 간주
-    is_cheap_vs_ma = ma120 is not None and current_price <= ma120
-    pe_ok = pe_ratio is None or pe_ratio < 40
-    pct_from_buy = (current_price - avg_buy_price) / avg_buy_price * 100
-    high_debt_risk = debt_to_equity is not None and debt_to_equity > 200
-
-    # --- 매도 고려 ---
-    if is_profitable is False and pct_from_buy <= -20:
-        reasons.append("적자 기업 + 평단가 대비 -20% 이상 하락")
+    # --- 매도 고려 (OR) ---
+    if return_pct <= -30:
+        reasons.append(f"수익률 {return_pct:.1f}% (-30% 이하)")
         return {"signal": "매도 고려", "reasons": reasons}
     if overweight:
-        reasons.append(f"현재비중이 목표비중({target_weight_pct:.0f}%)의 1.5배 초과 - 리밸런싱 필요")
-        return {"signal": "매도 고려", "reasons": reasons}
-    if high_debt_risk and is_profitable is False:
-        reasons.append("부채비율 200% 초과 + 적자 - 재무 위험")
+        reasons.append(f"현재비중이 목표비중({target_weight_pct:.1f}%)의 1.5배 초과 - 리밸런싱 필요")
         return {"signal": "매도 고려", "reasons": reasons}
 
-    # --- 매수 고려 ---
-    if has_room_to_buy and not_unprofitable:
-        if is_cheap_vs_ma:
-            reasons.append("목표비중 미달 + 120일 이평선 이하(저가 구간)")
-        else:
-            reasons.append("목표비중 미달 + 흑자 기업")
-        if not pe_ok:
-            reasons.append("단, PER이 다소 높아 신중 검토 필요")
+    # --- 매수 고려 (AND, 2가지 모두 충족해야 함) ---
+    if has_room_to_buy and is_dip:
+        reasons.append("목표비중 미달 + 60일·120일 이평선 모두 아래(조정 구간)")
         return {"signal": "매수 고려", "reasons": reasons}
 
-    # --- 보류 (기본값) ---
-    if target_weight_pct is None or current_weight_pct is None:
-        reasons.append("목표비중 정보 없음 - 장기 보유 유지")
-    else:
-        reasons.append("목표비중 범위 안 · 특별한 매수/매도 근거 없음")
+    # --- 보류 (기본값) - 매수 조건 중 뭐가 안 맞는지 설명 ---
+    missing = []
+    if not has_weight_info:
+        missing.append("목표/현재비중 정보 없음")
+    elif not has_room_to_buy:
+        missing.append("이미 목표비중 충족")
+    if not below_ma60:
+        missing.append("60일 이평선 위")
+    if not below_ma120:
+        missing.append("120일 이평선 위")
+    reasons.append("매수 조건 일부 미충족: " + ", ".join(missing) if missing else "특별한 매수/매도 신호 없음")
     return {"signal": "보류", "reasons": reasons}
