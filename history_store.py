@@ -129,6 +129,9 @@ def months_between_inclusive(start_ym: str, end_ym: str) -> int:
     sy, sm = (int(x) for x in start_ym.split("-"))
     ey, em = (int(x) for x in end_ym.split("-"))
     return (ey - sy) * 12 + (em - sm) + 1
+
+
+def previous_period(all_periods: dict, current_period: str) -> str | None:
     """current_period보다 이전인 것들 중 가장 최근 것을 반환 (YYYY-MM 문자열 비교라 정렬 가능)."""
     earlier = sorted(p for p in all_periods if p < current_period)
     return earlier[-1] if earlier else None
