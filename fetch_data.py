@@ -16,6 +16,7 @@ from sheet_utils import (
     find_table_total,
     find_date_in_row,
     parse_asset_detail_items,
+    parse_liability_detail_items,
     parse_ticker_tables,
     parse_monthly_category_table,
 )
@@ -51,22 +52,42 @@ def _find_worksheet_containing(worksheets: list[tuple[str, list]], label: str):
 
 def _all_worksheets_values(gc: gspread.Client, sheet_id: str) -> list[tuple[str, list[list[str]]]]:
     """스프레드시트 안의 '모든' 탭을 각각 (탭이름, 값들) 형태로 반환.
-    가계부처럼 탭이 월별로 나뉘어 있는 문서에 사용."""
+    가계부처럼 탭이 월별로 나뉘어 있는 문서에 사용.
+
+    ⚠️ 탭마다 따로따로 요청을 보내면 구글 API 할당량(분당 읽기 횟수)을 금방 넘겨서
+    'Quota exceeded' 에러가 납니다. 그래서 여러 탭을 '한 번의 요청'으로 묶어서 가져옵니다
+    (batchGet). 혹시 이 방식이 실패하면(구버전 라이브러리 등) 예전 방식(탭별로 하나씩)으로
+    자동 전환합니다."""
     sh = gc.open_by_key(sheet_id)
-    result = []
-    for ws in sh.worksheets():
-        try:
-            result.append((ws.title, ws.get_all_values()))
-        except Exception:
-            continue
-    return result
+    worksheets = sh.worksheets()
+    if not worksheets:
+        return []
+
+    try:
+        ranges = [f"'{ws.title}'" for ws in worksheets]
+        batch = sh.values_batch_get(ranges)
+        value_ranges = batch.get("valueRanges", [])
+        result = []
+        for ws, vr in zip(worksheets, value_ranges):
+            result.append((ws.title, vr.get("values", [])))
+        return result
+    except Exception:
+        # 배치 요청이 안 되면(옛날 라이브러리 등) 예전처럼 탭별로 하나씩 요청
+        result = []
+        for ws in worksheets:
+            try:
+                result.append((ws.title, ws.get_all_values()))
+            except Exception:
+                continue
+        return result
 
 
 # ---------------------------------------------------------------------------
 # 1) 자산현황 시트
 # ---------------------------------------------------------------------------
-def fetch_asset_summary(gc: gspread.Client, debug: bool = False) -> dict:
-    worksheets = _all_worksheets_values(gc, SHEET_IDS["asset"])
+def fetch_asset_summary(gc: gspread.Client, worksheets=None, debug: bool = False) -> dict:
+    if worksheets is None:
+        worksheets = _all_worksheets_values(gc, SHEET_IDS["asset"])
     if debug:
         print(f"[asset] 총 {len(worksheets)}개 탭:", [n for n, _ in worksheets])
 
@@ -92,6 +113,7 @@ def fetch_asset_summary(gc: gspread.Client, debug: bool = False) -> dict:
         "real_estate": val("부동산"),
         "etc": val("기타"),
         "items": parse_asset_detail_items(values),  # 개별 항목별 금액 (은행 예금, 계좌, 부동산 등)
+        "liability_items": parse_liability_detail_items(values),  # 개별 부채(대출 등) 항목
     }
     if debug:
         print("[asset_summary]", {k: v for k, v in result.items() if k != "items"})
@@ -102,8 +124,9 @@ def fetch_asset_summary(gc: gspread.Client, debug: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 # 1-1) 자산현황 파일의 '소비관리' 탭 (카테고리별 월간 지출)
 # ---------------------------------------------------------------------------
-def fetch_asset_spending_categories(gc: gspread.Client, debug: bool = False) -> dict:
-    worksheets = _all_worksheets_values(gc, SHEET_IDS["asset"])
+def fetch_asset_spending_categories(gc: gspread.Client, worksheets=None, debug: bool = False) -> dict:
+    if worksheets is None:
+        worksheets = _all_worksheets_values(gc, SHEET_IDS["asset"])
 
     tab_name, values = _find_worksheet_containing(worksheets, "Eat")
     if values is None:
@@ -194,6 +217,8 @@ def _parse_all_tickers(values: list[list[str]]) -> list[dict]:
                     "return_pct": to_number(row.get("수익률(%)")),
                     "price": to_number(row.get("현재가")),
                     "avg_buy_price": to_number(row.get("평단가")),
+                    "target_weight_pct": to_number(row.get("목표 비중")),
+                    "current_weight_pct": to_number(row.get("현재 비중")),
                 }
             )
     return tickers
@@ -271,24 +296,23 @@ def fetch_all(
     gc = get_client(service_account_info)
     year_month = year_month or datetime.date.today().strftime("%Y-%m")
 
-    asset = fetch_asset_summary(gc, debug=debug)
+    asset_worksheets = _all_worksheets_values(gc, SHEET_IDS["asset"])  # 자산 시트는 한 번만 읽어서 재사용
+    asset = fetch_asset_summary(gc, worksheets=asset_worksheets, debug=debug)
     stock = fetch_stock_summary(gc, debug=debug)
     ledger = fetch_ledger_monthly(gc, debug=debug)
-    spending = fetch_asset_spending_categories(gc, debug=debug)
+    spending = fetch_asset_spending_categories(gc, worksheets=asset_worksheets, debug=debug)
 
     asset_prev_items: dict = {}
     ticker_prev: dict = {}
     stock_trend: dict = {}
 
     if history_sheet_id:
-        # --- 자산 항목 스냅샷 저장 + 지난달 값 불러오기 ---
+        # --- 자산 항목 스냅샷 저장 + 지난달 값 불러오기 (저장한 결과를 그대로 재사용, 추가 조회 없음) ---
         asset_header = ["year_month", "item", "value"]
-        if asset.get("items"):
-            new_rows = [[name, str(value)] for name, value in asset["items"].items()]
-            history_store.upsert_snapshot(
-                gc, history_sheet_id, "asset_snapshots", asset_header, year_month, new_rows
-            )
-        all_asset_periods = history_store.load_all_periods(gc, history_sheet_id, "asset_snapshots")
+        asset_new_rows = [[name, str(value)] for name, value in (asset.get("items") or {}).items()]
+        all_asset_periods = history_store.upsert_snapshot(
+            gc, history_sheet_id, "asset_snapshots", asset_header, year_month, asset_new_rows
+        )
         prev_ym = history_store.previous_period(all_asset_periods, year_month)
         if prev_ym:
             asset_prev_items = {
@@ -302,20 +326,18 @@ def fetch_all(
             "year_month", "market", "account", "code", "name",
             "eval_amount", "buy_amount", "quantity", "profit", "return_pct", "price",
         ]
-        if stock.get("tickers"):
-            new_rows = [
-                [
-                    t["market"], t["account"], t["code"], t["name"],
-                    str(t.get("eval_amount") or ""), str(t.get("buy_amount") or ""),
-                    str(t.get("quantity") or ""), str(t.get("profit") or ""),
-                    str(t.get("return_pct") or ""), str(t.get("price") or ""),
-                ]
-                for t in stock["tickers"]
+        ticker_new_rows = [
+            [
+                t["market"], t["account"], t["code"], t["name"],
+                str(t.get("eval_amount") or ""), str(t.get("buy_amount") or ""),
+                str(t.get("quantity") or ""), str(t.get("profit") or ""),
+                str(t.get("return_pct") or ""), str(t.get("price") or ""),
             ]
-            history_store.upsert_snapshot(
-                gc, history_sheet_id, "stock_snapshots", ticker_header, year_month, new_rows
-            )
-        all_ticker_periods = history_store.load_all_periods(gc, history_sheet_id, "stock_snapshots")
+            for t in (stock.get("tickers") or [])
+        ]
+        all_ticker_periods = history_store.upsert_snapshot(
+            gc, history_sheet_id, "stock_snapshots", ticker_header, year_month, ticker_new_rows
+        )
         prev_ym2 = history_store.previous_period(all_ticker_periods, year_month)
         if prev_ym2:
             for row in all_ticker_periods[prev_ym2]:
@@ -326,7 +348,7 @@ def fetch_all(
 
         # --- 포트폴리오 총액 스냅샷 저장 + 3개월전/6개월전 값 불러오기 ---
         totals_header = ["year_month", "total_buy", "total_eval", "total_profit", "total_return_pct"]
-        history_store.upsert_snapshot(
+        all_totals_periods = history_store.upsert_snapshot(
             gc, history_sheet_id, "portfolio_totals", totals_header, year_month,
             [[
                 str(stock.get("total_buy") or ""),
@@ -335,7 +357,6 @@ def fetch_all(
                 str(stock.get("total_return_pct") or ""),
             ]],
         )
-        all_totals_periods = history_store.load_all_periods(gc, history_sheet_id, "portfolio_totals")
 
         def _totals_at(period_row):
             if not period_row:
