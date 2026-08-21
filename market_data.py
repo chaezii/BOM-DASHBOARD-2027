@@ -71,6 +71,19 @@ def fetch_technical_and_fundamental(market: str, code: str) -> dict:
     return result
 
 
+def fetch_usd_krw_rate() -> float | None:
+    """현재 원/달러 환율을 야후 파이낸스에서 가져옴 (1달러 = 몇 원)."""
+    try:
+        ticker = yf.Ticker("KRW=X")
+        hist = ticker.history(period="5d")
+        closes = hist["Close"].dropna()
+        if len(closes):
+            return float(closes.iloc[-1])
+    except Exception:
+        pass
+    return None
+
+
 def classify_signal(avg_buy_price, current_price, ma120) -> str:
     """
     매수 고려 : 실시간가가 120일 이동평균선 이하로 떨어졌을 경우 (최우선)
