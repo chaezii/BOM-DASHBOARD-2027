@@ -101,7 +101,7 @@ def classify_signal(
       - 현재비중 < 목표비중 (아직 배분 목표만큼 못 채움)
       - 실시간가 ≤ 60일 이동평균선 AND 실시간가 ≤ 120일 이동평균선 (둘 다 아래 - 확실한 조정 구간)
 
-    매도 고려 (아래 중 하나라도 해당하면 - OR):
+    매도 고려 (아래 2가지를 전부 만족할 때만 - AND):
       - 수익률(시트 기준) -30% 이하
       - 현재비중이 목표비중의 1.5배 초과
 
@@ -147,12 +147,10 @@ def _classify_signal_inner(
 
     reasons = []
 
-    # --- 매도 고려 (OR) ---
-    if return_pct <= -30:
-        reasons.append(f"수익률 {return_pct:.1f}% (-30% 이하)")
-        return {"signal": "매도 고려", "reasons": reasons}
-    if overweight:
-        reasons.append(f"현재비중이 목표비중({target_weight_pct:.1f}%)의 1.5배 초과 - 리밸런싱 필요")
+    # --- 매도 고려 (AND, 2가지 모두 충족해야 함) ---
+    heavy_loss = return_pct <= -30
+    if heavy_loss and overweight:
+        reasons.append(f"수익률 {return_pct:.1f}% (-30% 이하) + 현재비중이 목표비중({target_weight_pct:.1f}%)의 1.5배 초과")
         return {"signal": "매도 고려", "reasons": reasons}
 
     # --- 매수 고려 (AND, 2가지 모두 충족해야 함) ---
