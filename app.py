@@ -236,20 +236,32 @@ def _get_gc_client():
     return get_client(json.loads(sa_info_json))
 
 
-checklist_all = (
-    history_store.load_checklist(_get_gc_client(), history_sheet_id, "budget_checklist")
-    if history_sheet_id
-    else {}
-)
+checklist_all = {}
+checklist_load_error = None
+if history_sheet_id:
+    try:
+        checklist_all = history_store.load_checklist(_get_gc_client(), history_sheet_id, "budget_checklist")
+    except Exception as e:
+        checklist_load_error = str(e)
+
+if checklist_load_error:
+    if "429" in checklist_load_error or "Quota" in checklist_load_error or "RESOURCE_EXHAUSTED" in checklist_load_error:
+        st.warning("체크리스트를 불러오는 중 API 요청이 몰렸어요. 잠시 후 새로고침하면 다시 보일 거예요.")
+    else:
+        st.warning("체크리스트를 불러오지 못했어요. 아래 항목은 이번 화면에서만 임시로 표시됩니다.")
+
 this_month_checks = checklist_all.get(current_ym, {})
 
 
 def _on_toggle(item_key: str, widget_key: str):
     if not history_sheet_id:
         return
-    gc = _get_gc_client()
-    checked = st.session_state[widget_key]
-    history_store.upsert_checklist_item(gc, history_sheet_id, "budget_checklist", current_ym, item_key, checked)
+    try:
+        gc = _get_gc_client()
+        checked = st.session_state[widget_key]
+        history_store.upsert_checklist_item(gc, history_sheet_id, "budget_checklist", current_ym, item_key, checked)
+    except Exception:
+        st.toast("⚠️ 체크 저장에 실패했어요. 잠시 후 다시 시도해주세요.", icon="⚠️")
 
 
 # --- 소비 예산 ---
@@ -315,9 +327,10 @@ for name, amount, note in INVEST_ITEMS:
             disabled=not history_sheet_id,
         )
 
+_saving_pct = (total_invest / expected_saving * 100) if expected_saving else 0
 st.markdown(
     f"<div style='font-size:12px;color:#8a94a6;margin-top:4px;'>"
-    f"월 투자 배분 합계 {total_invest/10000:,.0f}만원 (계획 저축가능액 대비 {total_invest/expected_saving*100:.0f}%) · "
+    f"월 투자 배분 합계 {total_invest/10000:,.0f}만원 (계획 저축가능액 대비 {_saving_pct:.0f}%) · "
     f"남은 개월수(당월 포함) {total_months}개월"
     f"</div>",
     unsafe_allow_html=True,
