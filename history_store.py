@@ -225,6 +225,13 @@ def previous_period(all_periods: dict, current_period: str) -> str | None:
     return earlier[-1] if earlier else None
 
 
+def months_between_inclusive(start_ym: str, end_ym: str) -> int:
+    """start_ym부터 end_ym까지, 두 달 다 포함해서 몇 개월인지."""
+    sy, sm = (int(x) for x in start_ym.split("-"))
+    ey, em = (int(x) for x in end_ym.split("-"))
+    return (ey - sy) * 12 + (em - sm) + 1
+
+
 def shift_year_month(year_month: str, months_back: int) -> str:
     """'2026-08'에서 months_back개월 전을 'YYYY-MM' 문자열로 계산."""
     y, m = (int(x) for x in year_month.split("-"))
