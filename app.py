@@ -178,7 +178,7 @@ def monthly_goal_chart(history: list[dict], value_key: str, goal: float, color: 
         font={"color": "#e8ecf1"},
         margin=dict(t=40, b=10, l=10, r=10),
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[0, max(goal, max(values, default=0)) * 1.15]),
-        xaxis=dict(gridcolor="#232b36"),
+        xaxis=dict(gridcolor="#232b36", type="category"),  # "2026-08" 같은 문자열을 날짜로 오인해서 이상한 눈금이 나오는 것 방지
         showlegend=False,
     )
     return fig
@@ -645,7 +645,7 @@ if ledger:
         legend=dict(orientation="h", y=1.12),
         margin=dict(t=40, b=10),
         yaxis=dict(gridcolor="#232b36", tickfont=dict(color="#8a94a6")),
-        xaxis=dict(gridcolor="#232b36"),
+        xaxis=dict(gridcolor="#232b36", type="category"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -702,7 +702,7 @@ if sp_categories:
             font={"color": "#e8ecf1"},
             margin=dict(t=20, b=10, l=10, r=10),
             yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-            xaxis=dict(gridcolor="#232b36"),
+            xaxis=dict(gridcolor="#232b36", type="category"),
             showlegend=False,
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -739,7 +739,7 @@ if has_spending_data:
         legend=dict(orientation="h", y=1.15),
         margin=dict(t=50, b=10),
         yaxis=dict(gridcolor="#232b36", tickfont=dict(color="#8a94a6")),
-        xaxis=dict(gridcolor="#232b36"),
+        xaxis=dict(gridcolor="#232b36", type="category"),
     )
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Eat·Live·Wear·Enjoy·Edu·Ride·Other 카테고리별 지출을 월별로 쌓아서 보여줘요.")
@@ -906,7 +906,7 @@ if len(stock_monthly_trend) >= 2:
         margin=dict(t=40, b=10),
         yaxis=dict(title="평가손익(원)", gridcolor="#232b36", tickfont=dict(color="#8a94a6")),
         yaxis2=dict(title="평균 수익률(%)", overlaying="y", side="right", showgrid=False),
-        xaxis=dict(gridcolor="#232b36"),
+        xaxis=dict(gridcolor="#232b36", type="category"),
     )
     st.plotly_chart(fig, use_container_width=True)
     st.caption(
