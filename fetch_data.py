@@ -19,6 +19,7 @@ from sheet_utils import (
     parse_liability_detail_items,
     parse_ticker_tables,
     parse_monthly_category_table,
+    parse_investment_allocation_table,
 )
 import history_store
 
@@ -148,6 +149,28 @@ def fetch_asset_spending_categories(gc: gspread.Client, worksheets=None, debug: 
     if debug:
         print(f"[spending] '{tab_name}' 탭에서 파싱:", parsed)
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# 1-2) 자산현황 파일의 '자산배분' 탭 (월 적립식 투자 배분 목표/트래킹)
+# ---------------------------------------------------------------------------
+def fetch_investment_allocation_plan(gc: gspread.Client, worksheets=None, debug: bool = False) -> dict:
+    if worksheets is None:
+        worksheets = _all_worksheets_values(gc, SHEET_IDS["asset"])
+
+    result = {"items": [], "months": []}
+    for tname, tvalues in worksheets:
+        parsed = parse_investment_allocation_table(tvalues)
+        if parsed.get("items"):
+            result = parsed
+            if debug:
+                print(f"[invest_plan] '{tname}' 탭에서 {len(parsed['items'])}개 항목 발견:", parsed["items"])
+            break
+
+    if not result["items"] and debug:
+        print("[invest_plan] '자산배분' 표를 어느 탭에서도 찾지 못했습니다.")
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +372,7 @@ def fetch_all(
     stock = fetch_stock_summary(gc, debug=debug)
     ledger = fetch_ledger_monthly(gc, debug=debug)
     spending = fetch_asset_spending_categories(gc, worksheets=asset_worksheets, debug=debug)
+    invest_plan = fetch_investment_allocation_plan(gc, worksheets=asset_worksheets, debug=debug)
 
     asset_prev_items: dict = {}
     ticker_prev: dict = {}
@@ -474,6 +498,7 @@ def fetch_all(
         "stock": stock,
         "ledger": ledger,
         "spending": spending,
+        "invest_plan": invest_plan,
         "asset_prev_items": asset_prev_items,
         "ticker_prev": ticker_prev,
         "stock_trend": stock_trend,
