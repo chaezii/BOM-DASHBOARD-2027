@@ -262,6 +262,7 @@ def fetch_ledger_monthly(gc: gspread.Client, year: int = 2026, debug: bool = Fal
             income = to_number(find_in_window("총 수입"))
             expense = to_number(find_in_window("총 지출"))
             saving = to_number(find_in_window("총 저축"))
+            fixed_expense = _find_fixed_expense_in_tab(values)
 
             seen_dates.add(date_str)
             months.append(
@@ -271,6 +272,7 @@ def fetch_ledger_monthly(gc: gspread.Client, year: int = 2026, debug: bool = Fal
                     "income": income,
                     "expense": expense,
                     "saving": saving,
+                    "fixed_expense": fixed_expense,
                 }
             )
 
@@ -283,6 +285,24 @@ def fetch_ledger_monthly(gc: gspread.Client, year: int = 2026, debug: bool = Fal
         if not months:
             print("  -> 아무 달도 못 찾았습니다. 탭 이름/'시작일' 라벨이 실제 시트와 맞는지 확인하세요.")
     return months
+
+
+def _find_fixed_expense_in_tab(values: list[list[str]]):
+    """이 탭(월) 안에서 '고정지출' 라벨을 찾아 그 옆(같은 행, 오른쪽) 첫 숫자 값을 반환.
+    라벨을 못 찾으면 F80 셀(사용자가 알려준 위치, 0-index로 행79/열5)을 마지막 수단으로 사용."""
+    for row in values:
+        for c, cell in enumerate(row):
+            if cell and "고정지출" in str(cell):
+                for cc in range(c + 1, len(row)):
+                    v = to_number(row[cc])
+                    if v:
+                        return v
+    # 라벨을 못 찾았을 때의 폴백: F80 (엑셀 표기 F80 = 0-index 행79, 열5)
+    if len(values) > 79 and len(values[79]) > 5:
+        v = to_number(values[79][5])
+        if v:
+            return v
+    return None
 
 
 def fetch_stock_monthly_trend(gc: gspread.Client, history_sheet_id: str) -> list[dict]:
