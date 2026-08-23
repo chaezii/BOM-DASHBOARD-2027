@@ -6,6 +6,7 @@ Streamlit Community Cloud에 배포하면 고정 웹 링크가 생깁니다.
 """
 
 import json
+import re
 from datetime import date
 
 import pandas as pd
@@ -263,8 +264,8 @@ if comp_items:
         paper_bgcolor="#12171f",
         plot_bgcolor="#12171f",
         font={"color": "#e8ecf1"},
-        margin=dict(l=10, r=90, t=10, b=10),
-        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        margin=dict(l=10, r=140, t=10, b=10),
+        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[0, max(vals) * 1.35]),
         yaxis=dict(tickfont=dict(size=13)),
         showlegend=False,
     )
@@ -294,20 +295,52 @@ SPENDING_TARGETS = [
 ]
 SPENDING_TARGET_TOTAL = 4_500_000  # 사용자가 지정한 공식 목표 총액 (개별 합산 4,458,333과 소폭 차이)
 
-INVEST_ITEMS = [
-    ("국내일반/미국주식or 현금(달러)", 3_500_000, "한투", "64209401-21", "지연 운용 · 월말 수용 보고"),
-    ("지연 ISA", 1_350_000, "NH", "20802815046", "자동이체로 지수거래"),
-    ("수용 ISA", 1_350_000, "KB", "37349932601", "자동이체로 지수거래"),
-    ("수용 주택청약통장", 250_000, "우리", "1073115374810", "3년 후 다자녀 청약 도전"),
-    ("지연 연금저축", 500_000, "NH", "20802814978", "세제 혜택"),
-    ("IRP", 300_000, "계좌번호 미입력", "", "알려주시면 채워드릴게요"),
-]
+# 월 적립식 투자 배분 - 자산현황 파일의 '자산배분' 탭에서 동적으로 가져옴 (하드코딩 아님)
+_invest_plan = data.get("invest_plan") or {}
+_invest_plan_items = _invest_plan.get("items") or []
+
+
+def _split_name_note(raw_name: str):
+    """'국내일반/미국직투 주식 (한투 64209401-21)' -> ('국내일반/미국직투 주식', '한투 64209401-21')"""
+    m = re.match(r"^(.*?)\s*\((.+)\)\s*$", raw_name.strip())
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return raw_name.strip(), ""
+
+
+if _invest_plan_items:
+    INVEST_ITEMS = []
+    for item in _invest_plan_items:
+        title, note = _split_name_note(item["name"])
+        monthly = item.get("monthly_target") or 0
+        INVEST_ITEMS.append((title, monthly, note, item.get("annual_target")))
+else:
+    # 시트에서 못 읽어왔을 때의 폴백 (예전에 직접 입력해둔 계획)
+    INVEST_ITEMS = [
+        ("국내일반/미국주식or 현금(달러)", 3_500_000, "한투 64209401-21 · 지연 운용", None),
+        ("지연 ISA", 1_350_000, "NH 20802815046 · 자동이체로 지수거래", None),
+        ("수용 ISA", 1_350_000, "KB 37349932601 · 자동이체로 지수거래", None),
+        ("수용 주택청약통장", 250_000, "우리 1073115374810 · 3년 후 다자녀 청약 도전", None),
+        ("지연 연금저축", 500_000, "NH 20802814978 · 세제 혜택", None),
+        ("IRP", 250_000, "계좌번호 미입력", None),
+    ]
+    st.warning(
+        "자산현황 시트의 '자산배분' 탭을 찾지 못해서, 예전에 입력해둔 계획으로 대신 보여드려요. "
+        "디버그 모드를 켜면 로그에서 확인할 수 있어요."
+    )
 
 if not history_sheet_id:
     st.info(
         "체크 상태를 저장하려면 '기록용 시트'가 필요해요. 지금은 체크해도 새로고침하면 사라져요. "
         "README '기록용 시트 만들기' 단계를 먼저 해주세요."
     )
+
+if debug_mode:
+    with st.expander("🔍 디버그: 자산배분 탭에서 읽어온 항목", expanded=False):
+        if _invest_plan_items:
+            st.dataframe(pd.DataFrame(_invest_plan_items)[["name", "annual_target", "monthly_target"]], width='stretch', hide_index=True)
+        else:
+            st.error("자산배분 표를 어느 탭에서도 못 찾았어요. 헤더에 '연간목표', '목표', '합계', '1월'이 모두 있는 행이 있는지 확인해주세요.")
 
 
 @st.cache_resource
@@ -399,11 +432,11 @@ st.markdown(
 )
 
 total_months = history_store.months_between_inclusive(current_ym, PLAN_DEADLINE)
-total_invest = sum(a for _, a, _, _, _ in INVEST_ITEMS)
+total_invest = sum(a for _, a, _, _ in INVEST_ITEMS)
 
 # --- 이번 달 실행률: 실제 이체금액 합계 / 목표 합계 ---
 this_month_actual_total = 0
-for name, amount, bank, acct_no, note in INVEST_ITEMS:
+for name, amount, note, annual_target in INVEST_ITEMS:
     item_key = f"투자_{name}"
     v = to_number(this_month_invest.get(item_key))
     this_month_actual_total += v or 0
@@ -428,7 +461,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-for name, amount, bank, acct_no, note in INVEST_ITEMS:
+for name, amount, note, annual_target in INVEST_ITEMS:
     item_key = f"투자_{name}"
     widget_key = f"amt_{item_key}_{current_ym}"
 
@@ -449,19 +482,16 @@ for name, amount, bank, acct_no, note in INVEST_ITEMS:
         default_amount = 0
     is_done = default_amount > 0
 
+    annual_note = f" · 1년 목표 {annual_target:,.0f}원" if annual_target else ""
+
     with st.container(border=True):
         c1, c2 = st.columns([3, 1.3])
         with c1:
             st.markdown(
                 f"""
-                <div style="font-size:15px;font-weight:700;color:#e8ecf1;margin-bottom:4px;">{name}</div>
-                <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
-                  <span style="background:#232b36;color:#8a94a6;font-size:11px;padding:2px 8px;
-                               border-radius:20px;font-family:'IBM Plex Mono',monospace;">{bank}</span>
-                  <span style="color:#8a94a6;font-size:12px;font-family:'IBM Plex Mono',monospace;">{acct_no}</span>
-                </div>
+                <div style="font-size:15px;font-weight:700;color:#e8ecf1;margin-bottom:6px;">{name}</div>
                 <div style="font-size:11.5px;color:#5b9dff;margin-bottom:10px;">{note}</div>
-                <div style="font-size:11px;color:#8a94a6;">월 목표 {amount:,.0f}원</div>
+                <div style="font-size:11px;color:#8a94a6;">월 목표 {amount:,.0f}원{annual_note}</div>
                 """,
                 unsafe_allow_html=True,
             )
