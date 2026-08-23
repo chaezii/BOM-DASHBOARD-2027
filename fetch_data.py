@@ -388,6 +388,36 @@ def fetch_all(
         if debug:
             print("[history] stock_trend:", stock_trend)
 
+        # --- 순자산/현금 월별 스냅샷 저장 (게이지를 월별 그래프로 보여주기 위함) ---
+        liability_items_sum = sum((asset.get("liability_items") or {}).values())
+        liability_total = liability_items_sum if liability_items_sum else (asset.get("total_debt") or 0)
+        asset_total = sum((asset.get("items") or {}).values())
+        net_worth_now = asset_total - liability_total
+        networth_header = ["year_month", "cash", "net_worth", "total_assets", "total_debt"]
+        all_networth_periods = history_store.upsert_snapshot(
+            gc, history_sheet_id, "networth_history", networth_header, year_month,
+            [[
+                str(asset.get("cash") or ""),
+                str(net_worth_now or ""),
+                str(asset_total or ""),
+                str(liability_total or ""),
+            ]],
+        )
+        networth_history = []
+        for ym in sorted(all_networth_periods.keys()):
+            row = all_networth_periods[ym][0]
+            networth_history.append({
+                "year_month": ym,
+                "cash": to_number(row.get("cash")),
+                "net_worth": to_number(row.get("net_worth")),
+                "total_assets": to_number(row.get("total_assets")),
+                "total_debt": to_number(row.get("total_debt")),
+            })
+        if debug:
+            print(f"[history] networth_history: {len(networth_history)}개월 기록")
+    else:
+        networth_history = []
+
     return {
         "year_month": year_month,
         "asset": asset,
@@ -397,6 +427,7 @@ def fetch_all(
         "asset_prev_items": asset_prev_items,
         "ticker_prev": ticker_prev,
         "stock_trend": stock_trend,
+        "networth_history": networth_history,
     }
 
 
