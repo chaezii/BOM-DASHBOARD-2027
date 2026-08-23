@@ -83,6 +83,45 @@ def load_all_periods(
     return _by_period_from_values(values)
 
 
+def upsert_value(
+    gc: gspread.Client,
+    history_sheet_id: str,
+    tab_name: str,
+    year_month: str,
+    item: str,
+    value: str,
+) -> None:
+    """(year_month, item) 조합 하나의 값을 갱신. 값은 문자열로 저장 (불리언 'TRUE'/'FALSE'든, 숫자든 그대로).
+    다른 항목/다른 달 기록은 그대로 둠."""
+    header = ["year_month", "item", "value"]
+    sh = gc.open_by_key(history_sheet_id)
+    try:
+        ws = sh.worksheet(tab_name)
+        existing = ws.get_all_values()
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=tab_name, rows=300, cols=6)
+        existing = []
+
+    data_rows = existing[1:] if len(existing) > 1 else []
+    kept = [r for r in data_rows if not (len(r) >= 2 and r[0] == year_month and r[1] == item)]
+    kept.append([year_month, item, value])
+
+    all_values = [header] + kept
+    needed_rows = len(all_values) + 20
+    if ws.row_count < needed_rows:
+        ws.resize(rows=needed_rows)
+    ws.update(range_name="A1", values=all_values)
+
+
+def load_values(gc: gspread.Client, history_sheet_id: str, tab_name: str) -> dict[str, dict[str, str]]:
+    """{year_month: {item: value_문자열}} 형태로 전체 기록을 반환."""
+    by_period = load_all_periods(gc, history_sheet_id, tab_name)
+    result: dict[str, dict[str, str]] = {}
+    for ym, rows in by_period.items():
+        result[ym] = {row.get("item"): row.get("value", "") for row in rows}
+    return result
+
+
 def upsert_checklist_item(
     gc: gspread.Client,
     history_sheet_id: str,
@@ -124,7 +163,56 @@ def load_checklist(gc: gspread.Client, history_sheet_id: str, tab_name: str) -> 
     return result
 
 
-def months_between_inclusive(start_ym: str, end_ym: str) -> int:
+def save_text_snapshot(
+    gc: gspread.Client,
+    history_sheet_id: str,
+    tab_name: str,
+    key: str,
+    text: str,
+) -> None:
+    """key(예: 날짜 '2026-08-22')에 해당하는 긴 텍스트 하나를 저장. 같은 key면 덮어씀."""
+    import datetime as _dt
+
+    header = ["key", "text", "saved_at"]
+    sh = gc.open_by_key(history_sheet_id)
+    try:
+        ws = sh.worksheet(tab_name)
+        existing = ws.get_all_values()
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=tab_name, rows=50, cols=5)
+        existing = []
+
+    data_rows = existing[1:] if len(existing) > 1 else []
+    kept = [r for r in data_rows if not (len(r) >= 1 and r[0] == key)]
+    kept.append([key, text, _dt.datetime.utcnow().isoformat()])
+
+    all_values = [header] + kept
+    needed_rows = len(all_values) + 5
+    if ws.row_count < needed_rows:
+        ws.resize(rows=needed_rows)
+    if ws.col_count < 3:
+        ws.resize(cols=3)
+    ws.update(range_name="A1", values=all_values)
+
+
+def load_text_snapshot(
+    gc: gspread.Client,
+    history_sheet_id: str,
+    tab_name: str,
+    key: str,
+) -> str | None:
+    """key에 해당하는 저장된 텍스트를 반환. 없으면 None."""
+    try:
+        sh = gc.open_by_key(history_sheet_id)
+        ws = sh.worksheet(tab_name)
+    except (gspread.SpreadsheetNotFound, gspread.WorksheetNotFound):
+        return None
+
+    values = ws.get_all_values()
+    for row in values[1:]:
+        if row and row[0] == key:
+            return row[1] if len(row) > 1 else None
+    return None
     """start_ym부터 end_ym까지, 두 달 다 포함해서 몇 개월인지."""
     sy, sm = (int(x) for x in start_ym.split("-"))
     ey, em = (int(x) for x in end_ym.split("-"))
