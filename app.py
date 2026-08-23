@@ -115,6 +115,7 @@ current_ym = data.get("year_month") or date.today().strftime("%Y-%m")
 
 net_worth = asset.get("net_worth") or 0
 cash = asset.get("cash") or 0
+networth_history = data.get("networth_history") or []
 
 days_left = (DEADLINE - date.today()).days
 months_left = max(days_left / 30.4, 0.1)
@@ -130,23 +131,71 @@ st.markdown(
 st.title("순자산 10억, 현금 1억 — 2027년까지")
 st.caption(f"목표 시한 {DEADLINE.isoformat()} · 남은 기간 약 {days_left}일 ({months_left:.1f}개월)")
 
+
+def monthly_goal_chart(history: list[dict], value_key: str, goal: float, color: str, title: str):
+    """월별 실적 막대 + 목표 기준선을 함께 보여주는 차트."""
+    months = [h["year_month"] for h in history]
+    values = [h.get(value_key) or 0 for h in history]
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=months, y=values, marker_color=color, name="실적",
+        text=[f"{v:,.0f}원" for v in values], textposition="outside",
+        textfont=dict(color="#e8ecf1", size=11),
+        hovertemplate="%{x}: %{y:,.0f}원<extra></extra>",
+    )
+    fig.add_hline(
+        y=goal, line=dict(color="#d4af37", width=2, dash="dash"),
+        annotation_text=f"목표 {goal:,.0f}원", annotation_font_color="#d4af37",
+        annotation_position="top left",
+    )
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=14, color="#e8ecf1")),
+        height=260,
+        paper_bgcolor="#12171f", plot_bgcolor="#12171f",
+        font={"color": "#e8ecf1"},
+        margin=dict(t=40, b=10, l=10, r=10),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[0, max(goal, max(values, default=0)) * 1.15]),
+        xaxis=dict(gridcolor="#232b36"),
+        showlegend=False,
+    )
+    return fig
+
+
 # ---------------------------------------------------------------------------
-# 목표 게이지
+# 목표 진행 현황 (월별 추이)
 # ---------------------------------------------------------------------------
 c1, c2 = st.columns(2)
 with c1:
-    st.plotly_chart(gauge(net_worth, GOAL_NET_WORTH, "순자산 목표 진행률", "#34d8b0"), use_container_width=True)
+    if networth_history:
+        st.plotly_chart(
+            monthly_goal_chart(networth_history, "net_worth", GOAL_NET_WORTH, "#34d8b0", "순자산 목표 진행률 (월별)"),
+            use_container_width=True,
+        )
+    else:
+        st.plotly_chart(gauge(net_worth, GOAL_NET_WORTH, "순자산 목표 진행률", "#34d8b0"), use_container_width=True)
+        st.caption("기록용 시트를 연결하면 다음 달부터 월별 추이로 보여드려요.")
     gap = GOAL_NET_WORTH - net_worth
     st.metric("현재 순자산", eok(net_worth), delta=f"목표까지 {eok(gap)} 남음")
     if gap > 0:
         st.caption(f"필요 페이스: 월 {money(gap/months_left)}")
 
 with c2:
-    st.plotly_chart(gauge(cash, GOAL_CASH, "현금 목표 진행률", "#ff6b6b"), use_container_width=True)
+    if networth_history:
+        st.plotly_chart(
+            monthly_goal_chart(networth_history, "cash", GOAL_CASH, "#ff6b6b", "현금 목표 진행률 (월별)"),
+            use_container_width=True,
+        )
+    else:
+        st.plotly_chart(gauge(cash, GOAL_CASH, "현금 목표 진행률", "#ff6b6b"), use_container_width=True)
+        st.caption("기록용 시트를 연결하면 다음 달부터 월별 추이로 보여드려요.")
     gap_c = GOAL_CASH - cash
     st.metric("현재 현금", eok(cash), delta=f"목표까지 {eok(gap_c)} 남음")
     if gap_c > 0:
         st.caption(f"필요 페이스: 월 {money(gap_c/months_left)}")
+
+if networth_history and len(networth_history) < 3:
+    st.caption(f"📈 지금은 {len(networth_history)}개월치 기록만 있어요. 매달 앱을 열 때마다 자동으로 한 달씩 쌓입니다.")
 
 st.divider()
 
