@@ -401,6 +401,33 @@ st.markdown(
 total_months = history_store.months_between_inclusive(current_ym, PLAN_DEADLINE)
 total_invest = sum(a for _, a, _, _, _ in INVEST_ITEMS)
 
+# --- 이번 달 실행률: 실제 이체금액 합계 / 목표 합계 ---
+this_month_actual_total = 0
+for name, amount, bank, acct_no, note in INVEST_ITEMS:
+    item_key = f"투자_{name}"
+    v = to_number(this_month_invest.get(item_key))
+    this_month_actual_total += v or 0
+
+exec_pct = (this_month_actual_total / total_invest * 100) if total_invest else 0
+exec_color = "#34d8b0" if exec_pct >= 100 else ("#d4af37" if exec_pct >= 50 else "#ff6b6b")
+st.markdown(
+    f"""
+    <div style="background:#161c26;border:1px solid #232b36;border-radius:10px;
+                padding:14px 18px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;">
+        <div style="font-size:13px;color:#8a94a6;">{current_ym} 이번 달 실행률</div>
+        <div style="font-size:20px;font-weight:700;color:{exec_color};font-family:'IBM Plex Mono',monospace;">
+          {this_month_actual_total:,.0f}원 / {total_invest:,.0f}원 <span style="font-size:14px;">({exec_pct:.0f}%)</span>
+        </div>
+      </div>
+      <div style="background:#232b36;border-radius:6px;height:8px;overflow:hidden;margin-top:8px;">
+        <div style="background:{exec_color};width:{min(exec_pct,100):.1f}%;height:100%;"></div>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 for name, amount, bank, acct_no, note in INVEST_ITEMS:
     item_key = f"투자_{name}"
     widget_key = f"amt_{item_key}_{current_ym}"
