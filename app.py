@@ -88,6 +88,13 @@ sa_info_json = json.dumps(dict(st.secrets["gcp_service_account"]))
 history_sheet_id = None
 if "app" in st.secrets and st.secrets["app"].get("history_sheet_id"):
     history_sheet_id = st.secrets["app"]["history_sheet_id"]
+elif st.secrets.get("history_sheet_id"):  # [app] 섹션 없이 최상위에 넣은 경우도 지원
+    history_sheet_id = st.secrets["history_sheet_id"]
+
+if debug_mode:
+    st.sidebar.caption(
+        f"history_sheet_id 인식: {'✅ ' + history_sheet_id[:10] + '...' if history_sheet_id else '❌ 못 찾음 (Secrets의 [app] 섹션과 history_sheet_id 키 이름을 확인하세요)'}"
+    )
 
 try:
     data = load_data(sa_info_json, history_sheet_id, debug_mode)
@@ -111,7 +118,22 @@ except Exception as e:
 asset = data["asset"]
 stock = data["stock"]
 ledger = data["ledger"]
+spending = data.get("spending") or {}
 current_ym = data.get("year_month") or date.today().strftime("%Y-%m")
+tickers = stock.get("tickers", [])
+
+sp_categories = spending.get("categories") or {}
+sp_months = spending.get("months") or []  # ["1월",...,"12월"] - 시트가 그 해 전체를 담고 있어서 인덱스로 접근
+_current_month_idx = date.today().month - 1  # 0-based
+
+
+def category_actual_this_month(cat_name: str):
+    vals = sp_categories.get(cat_name)
+    if not vals or _current_month_idx >= len(vals):
+        return None
+    v = vals[_current_month_idx]
+    return v if v else None
+
 
 net_worth = asset.get("net_worth") or 0
 cash = asset.get("cash") or 0
@@ -273,11 +295,12 @@ SPENDING_TARGETS = [
 SPENDING_TARGET_TOTAL = 4_500_000  # 사용자가 지정한 공식 목표 총액 (개별 합산 4,458,333과 소폭 차이)
 
 INVEST_ITEMS = [
-    ("국내일반/미장 주식", 3_500_000, "한투", "64209401-21", "지연 운용 · 월말 수용 보고"),
+    ("국내일반/미국주식or 현금(달러)", 3_500_000, "한투", "64209401-21", "지연 운용 · 월말 수용 보고"),
     ("지연 ISA", 1_350_000, "NH", "20802815046", "자동이체로 지수거래"),
     ("수용 ISA", 1_350_000, "KB", "37349932601", "자동이체로 지수거래"),
     ("수용 주택청약통장", 250_000, "우리", "1073115374810", "3년 후 다자녀 청약 도전"),
     ("지연 연금저축", 500_000, "NH", "20802814978", "세제 혜택"),
+    ("IRP", 300_000, "계좌번호 미입력", "", "알려주시면 채워드릴게요"),
 ]
 
 if not history_sheet_id:
@@ -292,32 +315,32 @@ def _get_gc_client():
     return get_client(json.loads(sa_info_json))
 
 
-checklist_all = {}
-checklist_load_error = None
+invest_amounts_all = {}
+invest_load_error = None
 if history_sheet_id:
     try:
-        checklist_all = history_store.load_checklist(_get_gc_client(), history_sheet_id, "budget_checklist")
+        invest_amounts_all = history_store.load_values(_get_gc_client(), history_sheet_id, "invest_amounts")
     except Exception as e:
-        checklist_load_error = str(e)
+        invest_load_error = str(e)
 
-if checklist_load_error:
-    if "429" in checklist_load_error or "Quota" in checklist_load_error or "RESOURCE_EXHAUSTED" in checklist_load_error:
-        st.warning("체크리스트를 불러오는 중 API 요청이 몰렸어요. 잠시 후 새로고침하면 다시 보일 거예요.")
+if invest_load_error:
+    if "429" in invest_load_error or "Quota" in invest_load_error or "RESOURCE_EXHAUSTED" in invest_load_error:
+        st.warning("투자 배분 기록을 불러오는 중 API 요청이 몰렸어요. 잠시 후 새로고침하면 다시 보일 거예요.")
     else:
-        st.warning("체크리스트를 불러오지 못했어요. 아래 항목은 이번 화면에서만 임시로 표시됩니다.")
+        st.warning("투자 배분 기록을 불러오지 못했어요. 아래 항목은 이번 화면에서만 임시로 표시됩니다.")
 
-this_month_checks = checklist_all.get(current_ym, {})
+this_month_invest = invest_amounts_all.get(current_ym, {})
 
 
-def _on_toggle(item_key: str, widget_key: str):
+def _on_amount_change(item_key: str, widget_key: str):
     if not history_sheet_id:
         return
     try:
         gc = _get_gc_client()
-        checked = st.session_state[widget_key]
-        history_store.upsert_checklist_item(gc, history_sheet_id, "budget_checklist", current_ym, item_key, checked)
+        amount = st.session_state[widget_key]
+        history_store.upsert_value(gc, history_sheet_id, "invest_amounts", current_ym, item_key, str(amount))
     except Exception:
-        st.toast("⚠️ 체크 저장에 실패했어요. 잠시 후 다시 시도해주세요.", icon="⚠️")
+        st.toast("⚠️ 저장에 실패했어요. 잠시 후 다시 시도해주세요.", icon="⚠️")
 
 
 # --- 이번 달 지출 목표 (소비관리 탭 카테고리와 동일 기준) ---
@@ -327,16 +350,27 @@ st.markdown(
 )
 budget_cols = st.columns(4)
 for i, (cat, desc, target) in enumerate(SPENDING_TARGETS):
+    actual = category_actual_this_month(cat)
+    if actual is not None:
+        over = actual > target
+        actual_color = "#ff6b6b" if over else "#34d8b0"
+        actual_html = (
+            f'<div style="font-size:12px;color:{actual_color};margin-top:2px;">'
+            f'실적 {actual:,.0f}원 ({actual/target*100:.0f}%)</div>'
+        )
+    else:
+        actual_html = '<div style="font-size:11px;color:#8a94a6;margin-top:2px;">실적 데이터 없음</div>'
     with budget_cols[i % 4]:
         st.markdown(
             f"""
             <div style="background:#161c26;border:1px solid #232b36;border-radius:10px;
-                        padding:10px 12px;margin-bottom:10px;min-height:78px;">
+                        padding:10px 12px;margin-bottom:10px;min-height:96px;">
               <div style="font-size:12.5px;font-weight:600;color:#e8ecf1;">{cat}</div>
               <div style="font-size:10.5px;color:#8a94a6;margin-bottom:6px;line-height:1.3;">{desc}</div>
               <div style="font-size:14px;font-weight:600;color:#5b9dff;font-family:'IBM Plex Mono',monospace;">
-                {target:,.0f}원
+                목표 {target:,.0f}원
               </div>
+              {actual_html}
             </div>
             """,
             unsafe_allow_html=True,
@@ -353,7 +387,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.caption(
-    "실제로 목표를 지켰는지는 아래 '소비관리 · 카테고리별 지출' 섹션에서 이번 달 실적과 자동으로 비교해서 보여줘요."
+    "실적은 자산현황 시트의 소비관리 탭, 이번 달(현재 월) 칸을 그대로 가져온 값이에요."
 )
 
 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
@@ -369,16 +403,27 @@ total_invest = sum(a for _, a, _, _, _ in INVEST_ITEMS)
 
 for name, amount, bank, acct_no, note in INVEST_ITEMS:
     item_key = f"투자_{name}"
-    widget_key = f"chk_{item_key}_{current_ym}"
+    widget_key = f"amt_{item_key}_{current_ym}"
 
-    checked_months = sum(1 for ym, items in checklist_all.items() if items.get(item_key))
+    # 지난 기록들에서 이 항목에 실제로 입력된 금액을 전부 더함 (고정금액이 아니라 직접 쓴 값 기준)
+    recorded_amounts = []
+    for ym, items in invest_amounts_all.items():
+        raw = items.get(item_key)
+        v = to_number(raw)
+        if v:
+            recorded_amounts.append(v)
+    actual_total = sum(recorded_amounts)
+    months_recorded = len(recorded_amounts)
     target_total = amount * total_months
-    actual_total = amount * checked_months
     progress = min(actual_total / target_total, 1.0) if target_total else 0.0
-    is_done = this_month_checks.get(item_key, False)
+
+    default_amount = to_number(this_month_invest.get(item_key))
+    if default_amount is None:
+        default_amount = 0
+    is_done = default_amount > 0
 
     with st.container(border=True):
-        c1, c2 = st.columns([3, 1.1])
+        c1, c2 = st.columns([3, 1.3])
         with c1:
             st.markdown(
                 f"""
@@ -389,26 +434,21 @@ for name, amount, bank, acct_no, note in INVEST_ITEMS:
                   <span style="color:#8a94a6;font-size:12px;font-family:'IBM Plex Mono',monospace;">{acct_no}</span>
                 </div>
                 <div style="font-size:11.5px;color:#5b9dff;margin-bottom:10px;">{note}</div>
+                <div style="font-size:11px;color:#8a94a6;">월 목표 {amount:,.0f}원</div>
                 """,
                 unsafe_allow_html=True,
             )
         with c2:
-            st.markdown(
-                f"""
-                <div style="text-align:right;font-size:20px;font-weight:700;color:#e8ecf1;
-                            font-family:'IBM Plex Mono',monospace;margin-bottom:6px;">
-                  {amount/10000:,.0f}만원<span style="font-size:11px;color:#8a94a6;font-weight:400;">/월</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.checkbox(
-                "이번 달 이체 완료",
-                value=is_done,
+            st.number_input(
+                "이번 달 실제 이체액 (원)",
+                min_value=0,
+                step=10000,
+                value=int(default_amount),
                 key=widget_key,
-                on_change=_on_toggle,
+                on_change=_on_amount_change,
                 args=(item_key, widget_key),
                 disabled=not history_sheet_id,
+                help="목표액과 다르게 이체했으면 실제 금액을 직접 입력하세요. 0이면 '이번 달 미이체'로 기록돼요.",
             )
 
         bar_color = "#34d8b0" if is_done else "#5b9dff"
@@ -416,7 +456,7 @@ for name, amount, bank, acct_no, note in INVEST_ITEMS:
             f"""
             <div style="margin-top:2px;">
               <div style="display:flex;justify-content:space-between;font-size:11px;color:#8a94a6;margin-bottom:4px;">
-                <span>누적 {checked_months}개월 · {actual_total:,.0f}원</span>
+                <span>누적 {months_recorded}개월 입력 · 합계 {actual_total:,.0f}원</span>
                 <span>2027.12 목표 {target_total:,.0f}원 · {progress*100:.0f}%</span>
               </div>
               <div style="background:#232b36;border-radius:6px;height:8px;overflow:hidden;">
@@ -559,6 +599,7 @@ if asset_items:
         ),
         use_container_width=True,
         hide_index=True,
+        height=(len(rows) + 1) * 36 + 4,  # 행 개수에 딱 맞춰서 - 내부 스크롤 없이 순자산까지 한 번에 보이도록
     )
     if not liability_items and not asset.get("total_debt"):
         st.caption("⚠️ 부채 항목을 찾지 못해서 순자산에 부채가 반영되지 않았을 수 있어요. 디버그 모드로 확인해보세요.")
@@ -617,16 +658,66 @@ if ledger:
 else:
     st.info("가계부 데이터를 찾지 못했습니다. 디버그 모드를 켜고 fetch_data.py의 라벨 검색 로직을 확인하세요.")
 
+# --- 최근 6개월 고정지출 (소비관리 탭 카테고리 중 '고정성'이라고 생각하는 항목을 직접 선택) ---
+st.markdown("<div style='font-size:13px;font-weight:600;margin-top:16px;margin-bottom:8px;'>최근 6개월 고정지출</div>", unsafe_allow_html=True)
+
+if sp_categories:
+    all_cats = list(sp_categories.keys())
+    default_fixed = [c for c in ["Live"] if c in all_cats] or all_cats[:1]
+    fixed_cats = st.multiselect(
+        "고정지출로 볼 카테고리 선택 (매달 꾸준히 나가는 항목들 - 주거비, 구독료 등)",
+        options=all_cats,
+        default=default_fixed,
+        key="fixed_expense_cats",
+    )
+
+    if fixed_cats:
+        end_idx = _current_month_idx  # 이번 달까지
+        start_idx = max(0, end_idx - 5)
+        recent_months = sp_months[start_idx:end_idx + 1]
+
+        fixed_totals = []
+        for i in range(start_idx, end_idx + 1):
+            total = sum((sp_categories[c][i] if i < len(sp_categories[c]) else 0) for c in fixed_cats)
+            fixed_totals.append(total)
+
+        fig = go.Figure(
+            go.Bar(
+                x=recent_months, y=fixed_totals,
+                marker_color="#a78bfa",
+                text=[f"{v:,.0f}원" for v in fixed_totals],
+                textposition="outside",
+                textfont=dict(color="#e8ecf1", size=11),
+                hovertemplate="%{x}: %{y:,.0f}원<extra></extra>",
+            )
+        )
+        avg_fixed = sum(fixed_totals) / len(fixed_totals) if fixed_totals else 0
+        fig.add_hline(
+            y=avg_fixed, line=dict(color="#8a94a6", width=1.5, dash="dot"),
+            annotation_text=f"평균 {avg_fixed:,.0f}원", annotation_font_color="#8a94a6",
+        )
+        fig.update_layout(
+            height=280,
+            paper_bgcolor="#12171f", plot_bgcolor="#12171f",
+            font={"color": "#e8ecf1"},
+            margin=dict(t=20, b=10, l=10, r=10),
+            yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+            xaxis=dict(gridcolor="#232b36"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(f"선택한 카테고리({', '.join(fixed_cats)})의 합계를 최근 {len(recent_months)}개월간 보여줘요.")
+    else:
+        st.caption("카테고리를 하나 이상 선택하면 그래프가 나타나요.")
+else:
+    st.info("소비관리 탭 데이터가 있어야 고정지출을 계산할 수 있어요. (아래 '소비관리' 섹션 참고)")
+
 st.divider()
 
 # ---------------------------------------------------------------------------
 # 소비관리 (카테고리별 월간 지출) - 자산현황 파일의 '소비관리' 탭
 # ---------------------------------------------------------------------------
 st.subheader("소비관리 · 카테고리별 지출")
-
-spending = data.get("spending") or {}
-sp_categories = spending.get("categories") or {}
-sp_months = spending.get("months") or []
 
 has_spending_data = sp_categories and any(sum(v) > 0 for v in sp_categories.values())
 
@@ -656,10 +747,10 @@ if has_spending_data:
     # --- 이번 달 실적 vs 목표(자산 계획 노트에서 정한 값) 비교 ---
     st.markdown("<div style='font-size:13px;font-weight:600;margin-top:14px;margin-bottom:8px;'>이번 달 목표 대비 실적</div>", unsafe_allow_html=True)
     target_map = {cat: target for cat, _, target in SPENDING_TARGETS}
-    this_month_label = sp_months[-1] if sp_months else None
+    this_month_label = sp_months[_current_month_idx] if _current_month_idx < len(sp_months) else None
     compare_rows = []
     for cat, monthly_vals in sp_categories.items():
-        actual = monthly_vals[-1] if monthly_vals else 0
+        actual = monthly_vals[_current_month_idx] if _current_month_idx < len(monthly_vals) else 0
         target = target_map.get(cat)
         if target:
             diff = actual - target
@@ -784,6 +875,88 @@ if stock_trend:
     elif not stock_trend.get("3m_ago") and not stock_trend.get("6m_ago"):
         st.caption("아직 3개월/6개월 치 기록이 쌓이지 않았어요. 계속 사용하시면 자동으로 채워집니다.")
 
+# --- 월별 평균 수익률 vs 평가손익 흐름 (이중 그래프) ---
+st.markdown("<div style='font-size:13px;font-weight:600;margin-top:18px;margin-bottom:6px;'>월별 평균 수익률 vs 평가손익 흐름</div>", unsafe_allow_html=True)
+stock_monthly_trend = data.get("stock_monthly_trend") or []
+
+if len(stock_monthly_trend) >= 2:
+    months_t = [p["year_month"] for p in stock_monthly_trend]
+    avg_returns = [p["avg_return_pct"] for p in stock_monthly_trend]
+    total_profits = [p["total_profit"] for p in stock_monthly_trend]
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=months_t, y=total_profits, name="평가손익",
+        marker_color="#5b9dff", yaxis="y",
+        hovertemplate="평가손익 %{y:,.0f}원<extra></extra>",
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=months_t, y=avg_returns, name="평균 수익률",
+            mode="lines+markers", line=dict(color="#d4af37", width=3), marker=dict(size=7),
+            yaxis="y2",
+            hovertemplate="평균 수익률 %{y:.1f}%<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        height=320,
+        paper_bgcolor="#12171f", plot_bgcolor="#12171f",
+        font={"color": "#e8ecf1"},
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(t=40, b=10),
+        yaxis=dict(title="평가손익(원)", gridcolor="#232b36", tickfont=dict(color="#8a94a6")),
+        yaxis2=dict(title="평균 수익률(%)", overlaying="y", side="right", showgrid=False),
+        xaxis=dict(gridcolor="#232b36"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "파란 막대(평가손익)는 계속 쌓이는 게 중요하고, 금색 선(평균 수익률)은 적립식 매수 특성상 낮아져도 자연스러워요 — "
+        "수익률보다 평가손익의 우상향 흐름에 집중하시면 돼요."
+    )
+elif not history_sheet_id:
+    st.info("기록용 시트를 연결하면 다음 달부터 월별 흐름이 쌓여요.")
+else:
+    st.info(f"아직 {len(stock_monthly_trend)}개월치 기록만 있어요. 다음 달부터 그래프가 그려집니다.")
+
+# --- 국내/미국 TOP5 평가손익 ---
+st.markdown("<div style='font-size:13px;font-weight:600;margin-top:18px;margin-bottom:6px;'>시장별 TOP5 평가손익</div>", unsafe_allow_html=True)
+if tickers:
+    top5_markets = sorted(set(t["market"] for t in tickers))
+    top5_cols = st.columns(len(top5_markets))
+    for col, mk in zip(top5_cols, top5_markets):
+        with col:
+            mk_tickers = [t for t in tickers if t["market"] == mk and t.get("profit") is not None]
+            top5 = sorted(mk_tickers, key=lambda t: t["profit"], reverse=True)[:5]
+            if top5:
+                names = [t["name"] for t in reversed(top5)]
+                profits = [t["profit"] for t in reversed(top5)]
+                colors_top5 = ["#34d8b0" if p >= 0 else "#ff6b6b" for p in profits]
+                fig = go.Figure(
+                    go.Bar(
+                        x=profits, y=names, orientation="h",
+                        marker_color=colors_top5,
+                        text=[f"{p:+,.0f}원" for p in profits],
+                        textposition="outside",
+                        textfont=dict(color="#e8ecf1", size=11),
+                        hovertemplate="%{y}: %{x:+,.0f}원<extra></extra>",
+                    )
+                )
+                fig.update_layout(
+                    title=dict(text=f"{mk} TOP5", font=dict(size=13, color="#e8ecf1")),
+                    height=60 + 42 * len(top5),
+                    paper_bgcolor="#12171f", plot_bgcolor="#12171f",
+                    font={"color": "#e8ecf1"},
+                    margin=dict(l=10, r=70, t=40, b=10),
+                    xaxis=dict(showticklabels=False, showgrid=False, zeroline=True, zerolinecolor="#8a94a6"),
+                    yaxis=dict(tickfont=dict(size=12)),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.caption(f"{mk} 데이터 없음")
+else:
+    st.info("종목 데이터가 없어서 TOP5를 만들 수 없습니다.")
+
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -791,7 +964,6 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("주식 종목별 현황")
 
-tickers = stock.get("tickers", [])
 ticker_prev = data.get("ticker_prev", {})
 
 if tickers:
