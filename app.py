@@ -23,6 +23,19 @@ import history_store
 GOAL_NET_WORTH = 1_000_000_000
 GOAL_CASH = 100_000_000
 DEADLINE = date(2027, 12, 31)
+PLAN_DEADLINE = "2027-12"
+
+# 소비관리 탭(Eat/Live/Wear/Enjoy/Edu/Ride/Other)과 동일한 카테고리의 월 지출 목표
+SPENDING_TARGETS = [
+    ("Eat", "먹고 마시는 모든 지출", 900_000),
+    ("Live", "주거와 생활 관련 모든 지출", 2_158_333),
+    ("Wear", "입고 꾸미는 모든 지출", 300_000),
+    ("Enjoy", "문화·여행 등 즐기는 지출", 500_000),
+    ("Edu", "교육과 자녀 관련 지출", 100_000),
+    ("Ride", "교통 관련 지출", 200_000),
+    ("Other", "기타 지출", 300_000),
+]
+SPENDING_TARGET_TOTAL = 4_500_000  # 사용자가 지정한 공식 목표 총액 (개별 합산 4,458,333과 소폭 차이)
 
 st.set_page_config(page_title="통합 자산 대시보드", page_icon="\U0001F4C8", layout="wide")
 
@@ -97,6 +110,16 @@ if debug_mode:
         f"history_sheet_id 인식: {'✅ ' + history_sheet_id[:10] + '...' if history_sheet_id else '❌ 못 찾음 (Secrets의 [app] 섹션과 history_sheet_id 키 이름을 확인하세요)'}"
     )
 
+
+@st.cache_resource
+def _get_gc_client():
+    return get_client(json.loads(sa_info_json))
+
+
+anthropic_api_key = None
+if "app" in st.secrets and st.secrets["app"].get("anthropic_api_key"):
+    anthropic_api_key = st.secrets["app"]["anthropic_api_key"]
+
 try:
     data = load_data(sa_info_json, history_sheet_id, debug_mode)
 except Exception as e:
@@ -153,6 +176,101 @@ st.markdown(
 )
 st.title("순자산 10억, 현금 1억 — 2027년까지")
 st.caption(f"목표 시한 {DEADLINE.isoformat()} · 남은 기간 약 {days_left}일 ({months_left:.1f}개월)")
+
+# ---------------------------------------------------------------------------
+# 이번 달 인사이트 (AI 코멘트, 월 1회 생성)
+# ---------------------------------------------------------------------------
+if anthropic_api_key:
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+
+    def _build_insight_data_text() -> str:
+        lines = []
+        lines.append(f"기준월: {current_ym}")
+        lines.append(f"순자산: {net_worth:,.0f}원 (목표 {GOAL_NET_WORTH:,.0f}원, {net_worth/GOAL_NET_WORTH*100:.1f}%)")
+        lines.append(f"현금: {cash:,.0f}원 (목표 {GOAL_CASH:,.0f}원, {cash/GOAL_CASH*100:.1f}%)")
+        lines.append(f"자산구성: 부동산 {asset.get('real_estate') or 0:,.0f}원, 주식 {asset.get('stocks') or 0:,.0f}원, "
+                      f"퇴직연금 {asset.get('pension') or 0:,.0f}원, 현금 {asset.get('cash') or 0:,.0f}원")
+
+        cat_lines = []
+        for cat, _, target in SPENDING_TARGETS:
+            actual = category_actual_this_month(cat)
+            if actual is not None:
+                cat_lines.append(f"{cat} 목표{target:,.0f}/실적{actual:,.0f}")
+        if cat_lines:
+            lines.append("이번 달 소비(목표/실적): " + ", ".join(cat_lines))
+
+        plan_items = (data.get("invest_plan") or {}).get("items") or []
+        if plan_items:
+            invest_lines = [f"{it['name']} 월목표{(it.get('monthly_target') or 0):,.0f}원" for it in plan_items]
+            lines.append("월 적립식 투자 배분 목표: " + ", ".join(invest_lines))
+
+        trend = data.get("stock_monthly_trend") or []
+        if len(trend) >= 2:
+            prev, cur = trend[-2], trend[-1]
+            lines.append(
+                f"주식 평가손익 추이: 전월 {prev.get('total_profit') or 0:,.0f}원(수익률 {prev.get('avg_return_pct') or 0:.1f}%) "
+                f"→ 이번달 {cur.get('total_profit') or 0:,.0f}원(수익률 {cur.get('avg_return_pct') or 0:.1f}%)"
+            )
+        elif trend:
+            cur = trend[-1]
+            lines.append(f"주식 평가손익: {cur.get('total_profit') or 0:,.0f}원 (수익률 {cur.get('avg_return_pct') or 0:.1f}%)")
+
+        if tickers:
+            profitable = [t for t in tickers if t.get("profit") is not None]
+            if profitable:
+                top = sorted(profitable, key=lambda t: t["profit"], reverse=True)[:3]
+                bottom = sorted(profitable, key=lambda t: t["profit"])[:3]
+                lines.append("평가손익 상위 3: " + ", ".join(f"{t['name']} {t['profit']:+,.0f}원" for t in top))
+                lines.append("평가손익 하위 3: " + ", ".join(f"{t['name']} {t['profit']:+,.0f}원" for t in bottom))
+
+        return "\n".join(lines)
+
+    insight_key = current_ym
+    saved_insight = None
+    if history_sheet_id:
+        try:
+            saved_insight = history_store.load_text_snapshot(_get_gc_client(), history_sheet_id, "monthly_insights", insight_key)
+        except Exception:
+            saved_insight = None
+
+    with st.container(border=True):
+        col_h, col_btn = st.columns([4, 1])
+        with col_h:
+            st.markdown(f"**💡 {current_ym} 이번 달 인사이트**")
+            if saved_insight:
+                st.caption("이번 달 생성된 코멘트예요 (저장돼서 계속 유지됩니다).")
+            else:
+                st.caption("버튼을 눌러 이번 달 데이터 기반 코멘트를 생성해보세요. (월 1회 생성 권장, 호출당 소액 과금)")
+        with col_btn:
+            btn_label = "🔄 다시 생성" if saved_insight else "✨ 생성하기"
+            gen_clicked = st.button(btn_label, key="gen_monthly_insight")
+
+        if gen_clicked:
+            try:
+                with st.spinner("이번 달 데이터를 분석하는 중..."):
+                    data_text = _build_insight_data_text()
+                    new_insight = ai_insights_module().generate_monthly_insight(anthropic_api_key, data_text)
+                saved_insight = new_insight
+                if history_sheet_id:
+                    try:
+                        history_store.save_text_snapshot(_get_gc_client(), history_sheet_id, "monthly_insights", insight_key, new_insight)
+                    except Exception:
+                        st.warning("생성은 됐지만 저장에는 실패했어요. 새로고침하면 사라질 수 있어요.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"인사이트 생성에 실패했어요: {e}")
+
+        if saved_insight:
+            st.markdown(saved_insight)
+        elif not gen_clicked:
+            st.caption("아직 이번 달 인사이트가 없어요.")
+
+    st.divider()
+
+
+def ai_insights_module():
+    import ai_insights
+    return ai_insights
 
 
 def monthly_goal_chart(history: list[dict], value_key: str, goal: float, color: str, title: str):
@@ -281,20 +399,6 @@ st.divider()
 st.subheader("자산 계획 노트")
 st.caption("매월 5일, 전월 정산 후 아래 계획대로 이체합니다. 체크하면 자동으로 기록됩니다.")
 
-PLAN_DEADLINE = "2027-12"
-
-# 소비관리 탭(Eat/Live/Wear/Enjoy/Edu/Ride/Other)과 동일한 카테고리의 월 지출 목표
-SPENDING_TARGETS = [
-    ("Eat", "먹고 마시는 모든 지출", 900_000),
-    ("Live", "주거와 생활 관련 모든 지출", 2_158_333),
-    ("Wear", "입고 꾸미는 모든 지출", 300_000),
-    ("Enjoy", "문화·여행 등 즐기는 지출", 500_000),
-    ("Edu", "교육과 자녀 관련 지출", 100_000),
-    ("Ride", "교통 관련 지출", 200_000),
-    ("Other", "기타 지출", 300_000),
-]
-SPENDING_TARGET_TOTAL = 4_500_000  # 사용자가 지정한 공식 목표 총액 (개별 합산 4,458,333과 소폭 차이)
-
 # 월 적립식 투자 배분 - 자산현황 파일의 '자산배분' 탭에서 동적으로 가져옴 (하드코딩 아님)
 _invest_plan = data.get("invest_plan") or {}
 _invest_plan_items = _invest_plan.get("items") or []
@@ -343,11 +447,6 @@ if debug_mode:
             st.error("자산배분 표를 어느 탭에서도 못 찾았어요. 헤더에 '연간목표', '목표', '합계', '1월'이 모두 있는 행이 있는지 확인해주세요.")
 
 
-@st.cache_resource
-def _get_gc_client():
-    return get_client(json.loads(sa_info_json))
-
-
 invest_amounts_all = {}
 invest_load_error = None
 if history_sheet_id:
@@ -365,15 +464,16 @@ if invest_load_error:
 this_month_invest = invest_amounts_all.get(current_ym, {})
 
 
-def _on_amount_change(item_key: str, widget_key: str):
+def _save_invest_amount(item_key: str, amount_val: int):
+    """저장 버튼 클릭 시 호출 - 명시적으로 값을 저장 (엔터 타이밍 문제 없이 확실하게)."""
     if not history_sheet_id:
-        return
+        return False
     try:
         gc = _get_gc_client()
-        amount = st.session_state[widget_key]
-        history_store.upsert_value(gc, history_sheet_id, "invest_amounts", current_ym, item_key, str(amount))
+        history_store.upsert_value(gc, history_sheet_id, "invest_amounts", current_ym, item_key, str(amount_val))
+        return True
     except Exception:
-        st.toast("⚠️ 저장에 실패했어요. 잠시 후 다시 시도해주세요.", icon="⚠️")
+        return False
 
 
 # --- 이번 달 지출 목표 (소비관리 탭 카테고리와 동일 기준) ---
@@ -463,7 +563,6 @@ st.markdown(
 
 for name, amount, note, annual_target in INVEST_ITEMS:
     item_key = f"투자_{name}"
-    widget_key = f"amt_{item_key}_{current_ym}"
 
     # 지난 기록들에서 이 항목에 실제로 입력된 금액을 전부 더함 (고정금액이 아니라 직접 쓴 값 기준)
     recorded_amounts = []
@@ -496,17 +595,30 @@ for name, amount, note, annual_target in INVEST_ITEMS:
                 unsafe_allow_html=True,
             )
         with c2:
-            st.number_input(
-                "이번 달 실제 이체액 (원)",
-                min_value=0,
-                step=10000,
-                value=int(default_amount),
-                key=widget_key,
-                on_change=_on_amount_change,
-                args=(item_key, widget_key),
-                disabled=not history_sheet_id,
-                help="목표액과 다르게 이체했으면 실제 금액을 직접 입력하세요. 0이면 '이번 달 미이체'로 기록돼요.",
-            )
+            text_key = f"txt_{item_key}_{current_ym}"
+            if text_key not in st.session_state:
+                st.session_state[text_key] = f"{int(default_amount):,}"
+
+            col_in, col_btn = st.columns([2.2, 1])
+            with col_in:
+                st.text_input(
+                    "이번 달 실제 이체액 (원)",
+                    key=text_key,
+                    disabled=not history_sheet_id,
+                    help="숫자만 입력하세요 (콤마는 자동으로 붙어요). 다 쓰신 뒤 오른쪽 '저장' 버튼을 눌러주세요 — 엔터로는 저장되지 않아요.",
+                )
+            with col_btn:
+                st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)  # 라벨 높이만큼 버튼 위치 맞추기
+                if st.button("저장", key=f"save_{item_key}_{current_ym}", disabled=not history_sheet_id, width='stretch'):
+                    digits = re.sub(r"[^\d]", "", st.session_state[text_key] or "")
+                    amount_val = int(digits) if digits else 0
+                    ok = _save_invest_amount(item_key, amount_val)
+                    if ok:
+                        st.session_state[text_key] = f"{amount_val:,}"
+                        st.toast(f"{name} 저장 완료: {amount_val:,}원", icon="✅")
+                        st.rerun()
+                    else:
+                        st.toast("⚠️ 저장에 실패했어요. 잠시 후 다시 시도해주세요.", icon="⚠️")
 
         bar_color = "#34d8b0" if is_done else "#5b9dff"
         st.markdown(
@@ -1119,6 +1231,7 @@ if tickers:
                     ),
                     width='stretch',
                     hide_index=True,
+                    height=(len(df_t) + 1) * 36 + 4,  # 종목 개수만큼 높이를 늘려서 내부 스크롤 없이 한 번에 보이도록
                 )
     if not ticker_prev:
         st.caption("아직 지난달 기록이 없어서 증감이 비어있어요. 다음 달부터 채워집니다.")
@@ -1264,6 +1377,7 @@ if tickers:
                     ),
                     width='stretch',
                     hide_index=True,
+                    height=(len(df_sig) + 1) * 36 + 4,  # 종목 개수만큼 높이를 늘려서 내부 스크롤 없이 한 번에 보이도록
                 )
                 with st.expander("종목별 판단 근거 보기"):
                     for name, reasons in reasons_map.items():
