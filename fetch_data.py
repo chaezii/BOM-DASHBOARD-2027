@@ -285,6 +285,25 @@ def fetch_ledger_monthly(gc: gspread.Client, year: int = 2026, debug: bool = Fal
     return months
 
 
+def fetch_stock_monthly_trend(gc: gspread.Client, history_sheet_id: str) -> list[dict]:
+    """기록용 시트의 stock_snapshots(모든 티커, 모든 달)를 월별로 집계해서
+    [{"year_month":..,"avg_return_pct":..,"total_profit":..}, ...] 로 반환 (오래된 달 -> 최신 달 순)."""
+    by_period = history_store.load_all_periods(gc, history_sheet_id, "stock_snapshots")
+    result = []
+    for ym in sorted(by_period.keys()):
+        rows = by_period[ym]
+        returns = [to_number(r.get("return_pct")) for r in rows]
+        returns = [r for r in returns if r is not None]
+        profits = [to_number(r.get("profit")) for r in rows]
+        profits = [p for p in profits if p is not None]
+        result.append({
+            "year_month": ym,
+            "avg_return_pct": (sum(returns) / len(returns)) if returns else None,
+            "total_profit": sum(profits) if profits else None,
+        })
+    return result
+
+
 def fetch_all(
     service_account_info: dict,
     history_sheet_id: str | None = None,
@@ -415,8 +434,10 @@ def fetch_all(
             })
         if debug:
             print(f"[history] networth_history: {len(networth_history)}개월 기록")
+        stock_monthly_trend = fetch_stock_monthly_trend(gc, history_sheet_id)
     else:
         networth_history = []
+        stock_monthly_trend = []
 
     return {
         "year_month": year_month,
@@ -428,6 +449,7 @@ def fetch_all(
         "ticker_prev": ticker_prev,
         "stock_trend": stock_trend,
         "networth_history": networth_history,
+        "stock_monthly_trend": stock_monthly_trend,
     }
 
 
