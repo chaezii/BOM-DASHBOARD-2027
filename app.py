@@ -661,6 +661,18 @@ else:
 # --- 최근 6개월 고정지출 (가계부 시트, 각 월 탭의 '고정지출' 셀 값을 그대로 가져옴) ---
 st.markdown("<div style='font-size:13px;font-weight:600;margin-top:16px;margin-bottom:8px;'>최근 6개월 고정지출</div>", unsafe_allow_html=True)
 
+if debug_mode:
+    with st.expander("🔍 디버그: 가계부 원본 데이터 (월별 income/expense/fixed_expense)", expanded=True):
+        if ledger:
+            st.dataframe(pd.DataFrame(ledger), use_container_width=True, hide_index=True)
+            n_missing = sum(1 for m in ledger if m.get("fixed_expense") is None)
+            if n_missing:
+                st.warning(f"fixed_expense가 비어있는 달이 {n_missing}개 있어요. 위 표에서 None으로 표시된 행이에요.")
+            else:
+                st.success("모든 달에서 fixed_expense를 정상적으로 찾았어요.")
+        else:
+            st.error("ledger 데이터 자체가 비어있어요 (가계부 시트 연결/파싱 문제일 수 있어요).")
+
 fixed_expense_entries = [m for m in ledger if m.get("fixed_expense") is not None]
 
 if fixed_expense_entries:
