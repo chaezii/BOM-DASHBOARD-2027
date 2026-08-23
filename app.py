@@ -115,11 +115,6 @@ if debug_mode:
 def _get_gc_client():
     return get_client(json.loads(sa_info_json))
 
-
-anthropic_api_key = None
-if "app" in st.secrets and st.secrets["app"].get("anthropic_api_key"):
-    anthropic_api_key = st.secrets["app"]["anthropic_api_key"]
-
 try:
     data = load_data(sa_info_json, history_sheet_id, debug_mode)
 except Exception as e:
@@ -178,99 +173,87 @@ st.title("순자산 10억, 현금 1억 — 2027년까지")
 st.caption(f"목표 시한 {DEADLINE.isoformat()} · 남은 기간 약 {days_left}일 ({months_left:.1f}개월)")
 
 # ---------------------------------------------------------------------------
-# 이번 달 인사이트 (AI 코멘트, 월 1회 생성)
+# 이번 달 인사이트 (수기 메모 - Claude 등에게 따로 분석받은 내용을 붙여넣는 공간)
 # ---------------------------------------------------------------------------
-if anthropic_api_key:
-    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
 
-    def _build_insight_data_text() -> str:
-        lines = []
-        lines.append(f"기준월: {current_ym}")
-        lines.append(f"순자산: {net_worth:,.0f}원 (목표 {GOAL_NET_WORTH:,.0f}원, {net_worth/GOAL_NET_WORTH*100:.1f}%)")
-        lines.append(f"현금: {cash:,.0f}원 (목표 {GOAL_CASH:,.0f}원, {cash/GOAL_CASH*100:.1f}%)")
-        lines.append(f"자산구성: 부동산 {asset.get('real_estate') or 0:,.0f}원, 주식 {asset.get('stocks') or 0:,.0f}원, "
-                      f"퇴직연금 {asset.get('pension') or 0:,.0f}원, 현금 {asset.get('cash') or 0:,.0f}원")
+all_insight_periods = {}
+insight_load_error = None
+if history_sheet_id:
+    try:
+        all_insight_periods = history_store.load_all_periods(_get_gc_client(), history_sheet_id, "monthly_insights")
+    except Exception as e:
+        insight_load_error = str(e)
 
-        cat_lines = []
-        for cat, _, target in SPENDING_TARGETS:
-            actual = category_actual_this_month(cat)
-            if actual is not None:
-                cat_lines.append(f"{cat} 목표{target:,.0f}/실적{actual:,.0f}")
-        if cat_lines:
-            lines.append("이번 달 소비(목표/실적): " + ", ".join(cat_lines))
+# 기록이 있는 달 + 이번 달(아직 안 써도) 을 합쳐서, 최신 달이 먼저 오도록 정렬
+available_months = sorted(set(list(all_insight_periods.keys()) + [current_ym]), reverse=True)
 
-        plan_items = (data.get("invest_plan") or {}).get("items") or []
-        if plan_items:
-            invest_lines = [f"{it['name']} 월목표{(it.get('monthly_target') or 0):,.0f}원" for it in plan_items]
-            lines.append("월 적립식 투자 배분 목표: " + ", ".join(invest_lines))
+with st.container(border=True):
+    header_col, select_col = st.columns([2.2, 1.3])
+    with header_col:
+        st.markdown("**💡 이번 달 인사이트**")
+    with select_col:
+        selected_ym = st.selectbox(
+            "조회할 월",
+            available_months,
+            index=available_months.index(current_ym),
+            key="insight_month_select",
+            label_visibility="collapsed",
+        )
 
-        trend = data.get("stock_monthly_trend") or []
-        if len(trend) >= 2:
-            prev, cur = trend[-2], trend[-1]
-            lines.append(
-                f"주식 평가손익 추이: 전월 {prev.get('total_profit') or 0:,.0f}원(수익률 {prev.get('avg_return_pct') or 0:.1f}%) "
-                f"→ 이번달 {cur.get('total_profit') or 0:,.0f}원(수익률 {cur.get('avg_return_pct') or 0:.1f}%)"
-            )
-        elif trend:
-            cur = trend[-1]
-            lines.append(f"주식 평가손익: {cur.get('total_profit') or 0:,.0f}원 (수익률 {cur.get('avg_return_pct') or 0:.1f}%)")
+    if selected_ym == current_ym:
+        st.caption(
+            "부부가 매달 정산할 때 참고할 메모 공간이에요. 대시보드 링크를 Claude(또는 다른 곳)에 주고 "
+            "받은 분석/인사이트를 여기에 붙여넣고 저장하면, 이번 달 내내 이 자리에 보여요."
+        )
+    else:
+        st.caption(f"📅 지난 기록을 보고 있어요 ({selected_ym}). 오른쪽 드롭다운에서 다른 달을 골라볼 수 있어요.")
 
-        if tickers:
-            profitable = [t for t in tickers if t.get("profit") is not None]
-            if profitable:
-                top = sorted(profitable, key=lambda t: t["profit"], reverse=True)[:3]
-                bottom = sorted(profitable, key=lambda t: t["profit"])[:3]
-                lines.append("평가손익 상위 3: " + ", ".join(f"{t['name']} {t['profit']:+,.0f}원" for t in top))
-                lines.append("평가손익 하위 3: " + ", ".join(f"{t['name']} {t['profit']:+,.0f}원" for t in bottom))
+    if not history_sheet_id:
+        st.info("저장하려면 '기록용 시트' 연결이 필요해요. 지금은 저장해도 새로고침하면 사라져요.")
+    if insight_load_error:
+        st.warning("기존 메모를 불러오지 못했어요. 저장은 계속 가능해요.")
 
-        return "\n".join(lines)
+    saved_rows = all_insight_periods.get(selected_ym)
+    saved_insight = saved_rows[0].get("text") if saved_rows else None
 
-    insight_key = current_ym
-    saved_insight = None
-    if history_sheet_id:
-        try:
-            saved_insight = history_store.load_text_snapshot(_get_gc_client(), history_sheet_id, "monthly_insights", insight_key)
-        except Exception:
-            saved_insight = None
+    edit_key = f"insight_edit_{selected_ym}"
+    is_editing = st.session_state.get(edit_key, saved_insight is None)
 
-    with st.container(border=True):
-        col_h, col_btn = st.columns([4, 1])
-        with col_h:
-            st.markdown(f"**💡 {current_ym} 이번 달 인사이트**")
-            if saved_insight:
-                st.caption("이번 달 생성된 코멘트예요 (저장돼서 계속 유지됩니다).")
-            else:
-                st.caption("버튼을 눌러 이번 달 데이터 기반 코멘트를 생성해보세요. (월 1회 생성 권장, 호출당 소액 과금)")
-        with col_btn:
-            btn_label = "🔄 다시 생성" if saved_insight else "✨ 생성하기"
-            gen_clicked = st.button(btn_label, key="gen_monthly_insight")
-
-        if gen_clicked:
-            try:
-                with st.spinner("이번 달 데이터를 분석하는 중..."):
-                    data_text = _build_insight_data_text()
-                    new_insight = ai_insights_module().generate_monthly_insight(anthropic_api_key, data_text)
-                saved_insight = new_insight
-                if history_sheet_id:
-                    try:
-                        history_store.save_text_snapshot(_get_gc_client(), history_sheet_id, "monthly_insights", insight_key, new_insight)
-                    except Exception:
-                        st.warning("생성은 됐지만 저장에는 실패했어요. 새로고침하면 사라질 수 있어요.")
+    if not is_editing and saved_insight:
+        st.markdown(saved_insight)
+        if st.button("✏️ 수정하기", key=f"edit_insight_{selected_ym}"):
+            st.session_state[edit_key] = True
+            st.rerun()
+    else:
+        text_area_key = f"insight_text_{selected_ym}"
+        st.text_area(
+            "인사이트 붙여넣기",
+            value=saved_insight or "",
+            height=220,
+            key=text_area_key,
+            label_visibility="collapsed",
+            placeholder="예) 대시보드 링크 주고 Claude한테 받은 분석 내용을 여기에 붙여넣으세요...",
+            disabled=not history_sheet_id,
+        )
+        col_save, col_cancel = st.columns([1, 5])
+        with col_save:
+            if st.button("저장", key=f"save_insight_{selected_ym}", disabled=not history_sheet_id, width='stretch'):
+                new_text = st.session_state[text_area_key].strip()
+                try:
+                    gc = _get_gc_client()
+                    history_store.save_text_snapshot(gc, history_sheet_id, "monthly_insights", selected_ym, new_text)
+                    st.session_state[edit_key] = False
+                    st.toast("저장 완료!", icon="✅")
+                    st.rerun()
+                except Exception:
+                    st.toast("⚠️ 저장에 실패했어요. 잠시 후 다시 시도해주세요.", icon="⚠️")
+        with col_cancel:
+            if saved_insight and st.button("취소", key=f"cancel_insight_{selected_ym}"):
+                st.session_state[edit_key] = False
                 st.rerun()
-            except Exception as e:
-                st.error(f"인사이트 생성에 실패했어요: {e}")
 
-        if saved_insight:
-            st.markdown(saved_insight)
-        elif not gen_clicked:
-            st.caption("아직 이번 달 인사이트가 없어요.")
-
-    st.divider()
-
-
-def ai_insights_module():
-    import ai_insights
-    return ai_insights
+st.divider()
 
 
 def monthly_goal_chart(history: list[dict], value_key: str, goal: float, color: str, title: str):
