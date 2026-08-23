@@ -168,6 +168,56 @@ def _parse_label_value_rows(values: list[list[str]], from_row: int, to_row: int)
     return items
 
 
+def parse_investment_allocation_table(
+    values: list[list[str]],
+    month_labels: tuple[str, ...] = tuple(f"{m}월" for m in range(1, 13)),
+    total_label: str = "합계",
+) -> dict:
+    """
+    '항목 | 연간목표 | 목표 | 합계 | 1월 | ... | 12월' 형태의 자산배분 표를 찾아서
+    [{"name":..,"annual_target":..,"monthly_target":..,"monthly_values":[...]}] 로 반환.
+    """
+    header_row_idx = None
+    col_positions: dict[str, int] = {}
+    for r, row in enumerate(values):
+        cells = [(c or "").strip() for c in row]
+        if "연간목표" in cells and "목표" in cells and "합계" in cells and "1월" in cells:
+            header_row_idx = r
+            for c, cell in enumerate(cells):
+                if cell:
+                    col_positions[cell] = c  # 나중에 나오는 동일 이름은 덮어써도 무방 (거의 안 겹침)
+            break
+
+    if header_row_idx is None:
+        return {"items": [], "months": list(month_labels)}
+
+    def get_val(row, col_name):
+        idx = col_positions.get(col_name)
+        if idx is None or idx >= len(row):
+            return None
+        return row[idx]
+
+    items = []
+    for r in range(header_row_idx + 1, len(values)):
+        row = values[r]
+        name = (row[0] or "").strip() if row else ""
+        if not name:
+            continue
+        if name == total_label:
+            break
+        annual_target = to_number(get_val(row, "연간목표"))
+        monthly_target = to_number(get_val(row, "목표"))
+        monthly_values = [to_number(get_val(row, m)) or 0 for m in month_labels]
+        items.append({
+            "name": name,
+            "annual_target": annual_target,
+            "monthly_target": monthly_target,
+            "monthly_values": monthly_values,
+        })
+
+    return {"items": items, "months": list(month_labels)}
+
+
 def parse_monthly_category_table(
     values: list[list[str]],
     month_labels: tuple[str, ...] = tuple(f"{m}월" for m in range(1, 13)),
