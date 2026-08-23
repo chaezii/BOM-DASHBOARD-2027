@@ -192,10 +192,10 @@ with c1:
     if networth_history:
         st.plotly_chart(
             monthly_goal_chart(networth_history, "net_worth", GOAL_NET_WORTH, "#34d8b0", "순자산 목표 진행률 (월별)"),
-            use_container_width=True,
+            width='stretch',
         )
     else:
-        st.plotly_chart(gauge(net_worth, GOAL_NET_WORTH, "순자산 목표 진행률", "#34d8b0"), use_container_width=True)
+        st.plotly_chart(gauge(net_worth, GOAL_NET_WORTH, "순자산 목표 진행률", "#34d8b0"), width='stretch')
         st.caption("기록용 시트를 연결하면 다음 달부터 월별 추이로 보여드려요.")
     gap = GOAL_NET_WORTH - net_worth
     st.metric("현재 순자산", eok(net_worth), delta=f"목표까지 {eok(gap)} 남음")
@@ -206,10 +206,10 @@ with c2:
     if networth_history:
         st.plotly_chart(
             monthly_goal_chart(networth_history, "cash", GOAL_CASH, "#ff6b6b", "현금 목표 진행률 (월별)"),
-            use_container_width=True,
+            width='stretch',
         )
     else:
-        st.plotly_chart(gauge(cash, GOAL_CASH, "현금 목표 진행률", "#ff6b6b"), use_container_width=True)
+        st.plotly_chart(gauge(cash, GOAL_CASH, "현금 목표 진행률", "#ff6b6b"), width='stretch')
         st.caption("기록용 시트를 연결하면 다음 달부터 월별 추이로 보여드려요.")
     gap_c = GOAL_CASH - cash
     st.metric("현재 현금", eok(cash), delta=f"목표까지 {eok(gap_c)} 남음")
@@ -268,7 +268,7 @@ if comp_items:
         yaxis=dict(tickfont=dict(size=13)),
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 else:
     st.info("자산 구성 데이터를 찾지 못했습니다.")
 
@@ -597,7 +597,7 @@ if asset_items:
             {"이번 달": "{:+,.0f}원", "지난달": "{:+,.0f}원", "증감": "{:+,.0f}원"},
             na_rep="—",
         ),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=(len(rows) + 1) * 36 + 4,  # 행 개수에 딱 맞춰서 - 내부 스크롤 없이 순자산까지 한 번에 보이도록
     )
@@ -647,7 +647,7 @@ if ledger:
         yaxis=dict(gridcolor="#232b36", tickfont=dict(color="#8a94a6")),
         xaxis=dict(gridcolor="#232b36", type="category"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     filled_income = [m for m in ledger if m["income"]]
     if len(filled_income) < len(ledger) / 2:
@@ -664,7 +664,7 @@ st.markdown("<div style='font-size:13px;font-weight:600;margin-top:16px;margin-b
 if debug_mode:
     with st.expander("🔍 디버그: 가계부 원본 데이터 (월별 income/expense/fixed_expense)", expanded=True):
         if ledger:
-            st.dataframe(pd.DataFrame(ledger), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(ledger), width='stretch', hide_index=True)
             n_missing = sum(1 for m in ledger if m.get("fixed_expense") is None)
             if n_missing:
                 st.warning(f"fixed_expense가 비어있는 달이 {n_missing}개 있어요. 위 표에서 None으로 표시된 행이에요.")
@@ -704,7 +704,7 @@ if fixed_expense_entries:
         xaxis=dict(gridcolor="#232b36", type="category"),
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     st.caption(f"가계부 시트 각 월 탭의 '고정지출' 셀 값을 그대로 가져온 최근 {len(recent)}개월 추이예요.")
 else:
     st.info(
@@ -741,7 +741,7 @@ if has_spending_data:
         yaxis=dict(gridcolor="#232b36", tickfont=dict(color="#8a94a6")),
         xaxis=dict(gridcolor="#232b36", type="category"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     st.caption("Eat·Live·Wear·Enjoy·Edu·Ride·Other 카테고리별 지출을 월별로 쌓아서 보여줘요.")
 
     # --- 이번 달 실적 vs 목표(자산 계획 노트에서 정한 값) 비교 ---
@@ -766,7 +766,7 @@ if has_spending_data:
             df_cmp.style.apply(_over_budget, axis=1).format(
                 {"목표": "{:,.0f}원", "실적": "{:,.0f}원", "차이": "{:+,.0f}원", "달성률": "{:.0f}%"}
             ),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
         st.caption(f"기준: {this_month_label or '이번 달'} 실적 (빨강=목표 초과, 초록=목표 이내)")
@@ -868,7 +868,7 @@ if stock_trend:
         xaxis=dict(tickfont=dict(size=13)),
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     if not history_sheet_id:
         st.caption("3개월/6개월 전 값을 보려면 기록용 시트를 연결해야 해요 (README '기록용 시트 만들기' 참고).")
@@ -908,7 +908,7 @@ if len(stock_monthly_trend) >= 2:
         yaxis2=dict(title="평균 수익률(%)", overlaying="y", side="right", showgrid=False),
         xaxis=dict(gridcolor="#232b36", type="category"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     st.caption(
         "파란 막대(평가손익)는 계속 쌓이는 게 중요하고, 금색 선(평균 수익률)은 적립식 매수 특성상 낮아져도 자연스러워요 — "
         "수익률보다 평가손익의 우상향 흐름에 집중하시면 돼요."
@@ -930,7 +930,14 @@ if tickers:
             if top5:
                 # 리스트 순서 그대로(1등이 맨 앞) 넣고, 축을 반전시켜서 1등이 위로 오게 함
                 # (수동으로 리스트를 뒤집으면 순서가 꼬이기 쉬워서, 축 반전이 더 안전합니다)
-                names = [t["name"] for t in top5]
+                # 계좌가 여러 개면 같은 종목명이 겹쳐서 막대가 포개지므로, 계좌명을 같이 표시해서 구분
+                name_counts = {}
+                for t in mk_tickers:
+                    name_counts[t["name"]] = name_counts.get(t["name"], 0) + 1
+                names = [
+                    f"{t['name']} ({t['account']})" if name_counts.get(t["name"], 0) > 1 and t.get("account") else t["name"]
+                    for t in top5
+                ]
                 profits = [t["profit"] for t in top5]
                 colors_top5 = ["#34d8b0" if p >= 0 else "#ff6b6b" for p in profits]
 
@@ -962,7 +969,7 @@ if tickers:
                     yaxis=dict(tickfont=dict(size=12), autorange="reversed"),  # 1등이 맨 위로
                     showlegend=False,
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
                 if len(mk_tickers) < 5:
                     st.caption(f"평가손익 값이 있는 {mk} 종목이 {len(mk_tickers)}개뿐이라 {len(top5)}개만 표시돼요.")
             else:
@@ -1053,7 +1060,7 @@ if tickers:
                         },
                         na_rep="—",
                     ),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
     if not ticker_prev:
@@ -1198,7 +1205,7 @@ if tickers:
                         },
                         na_rep="—",
                     ),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
                 with st.expander("종목별 판단 근거 보기"):
