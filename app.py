@@ -658,59 +658,47 @@ if ledger:
 else:
     st.info("가계부 데이터를 찾지 못했습니다. 디버그 모드를 켜고 fetch_data.py의 라벨 검색 로직을 확인하세요.")
 
-# --- 최근 6개월 고정지출 (소비관리 탭 카테고리 중 '고정성'이라고 생각하는 항목을 직접 선택) ---
+# --- 최근 6개월 고정지출 (가계부 시트, 각 월 탭의 '고정지출' 셀 값을 그대로 가져옴) ---
 st.markdown("<div style='font-size:13px;font-weight:600;margin-top:16px;margin-bottom:8px;'>최근 6개월 고정지출</div>", unsafe_allow_html=True)
 
-if sp_categories:
-    all_cats = list(sp_categories.keys())
-    default_fixed = [c for c in ["Live"] if c in all_cats] or all_cats[:1]
-    fixed_cats = st.multiselect(
-        "고정지출로 볼 카테고리 선택 (매달 꾸준히 나가는 항목들 - 주거비, 구독료 등)",
-        options=all_cats,
-        default=default_fixed,
-        key="fixed_expense_cats",
+fixed_expense_entries = [m for m in ledger if m.get("fixed_expense") is not None]
+
+if fixed_expense_entries:
+    recent = fixed_expense_entries[-6:]  # 이미 날짜순 정렬되어 있음 (ledger가 date로 정렬됨)
+    recent_months_labels = [m["date"] for m in recent]
+    fixed_totals = [m["fixed_expense"] for m in recent]
+
+    fig = go.Figure(
+        go.Bar(
+            x=recent_months_labels, y=fixed_totals,
+            marker_color="#a78bfa",
+            text=[f"{v:,.0f}원" for v in fixed_totals],
+            textposition="outside",
+            textfont=dict(color="#e8ecf1", size=11),
+            hovertemplate="%{x}: %{y:,.0f}원<extra></extra>",
+        )
     )
-
-    if fixed_cats:
-        end_idx = _current_month_idx  # 이번 달까지
-        start_idx = max(0, end_idx - 5)
-        recent_months = sp_months[start_idx:end_idx + 1]
-
-        fixed_totals = []
-        for i in range(start_idx, end_idx + 1):
-            total = sum((sp_categories[c][i] if i < len(sp_categories[c]) else 0) for c in fixed_cats)
-            fixed_totals.append(total)
-
-        fig = go.Figure(
-            go.Bar(
-                x=recent_months, y=fixed_totals,
-                marker_color="#a78bfa",
-                text=[f"{v:,.0f}원" for v in fixed_totals],
-                textposition="outside",
-                textfont=dict(color="#e8ecf1", size=11),
-                hovertemplate="%{x}: %{y:,.0f}원<extra></extra>",
-            )
-        )
-        avg_fixed = sum(fixed_totals) / len(fixed_totals) if fixed_totals else 0
-        fig.add_hline(
-            y=avg_fixed, line=dict(color="#8a94a6", width=1.5, dash="dot"),
-            annotation_text=f"평균 {avg_fixed:,.0f}원", annotation_font_color="#8a94a6",
-        )
-        fig.update_layout(
-            height=280,
-            paper_bgcolor="#12171f", plot_bgcolor="#12171f",
-            font={"color": "#e8ecf1"},
-            margin=dict(t=20, b=10, l=10, r=10),
-            yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-            xaxis=dict(gridcolor="#232b36", type="category"),
-            showlegend=False,
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(f"선택한 카테고리({', '.join(fixed_cats)})의 합계를 최근 {len(recent_months)}개월간 보여줘요.")
-    else:
-        st.caption("카테고리를 하나 이상 선택하면 그래프가 나타나요.")
+    avg_fixed = sum(fixed_totals) / len(fixed_totals) if fixed_totals else 0
+    fig.add_hline(
+        y=avg_fixed, line=dict(color="#8a94a6", width=1.5, dash="dot"),
+        annotation_text=f"평균 {avg_fixed:,.0f}원", annotation_font_color="#8a94a6",
+    )
+    fig.update_layout(
+        height=280,
+        paper_bgcolor="#12171f", plot_bgcolor="#12171f",
+        font={"color": "#e8ecf1"},
+        margin=dict(t=20, b=10, l=10, r=10),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[0, max(fixed_totals) * 1.2]),
+        xaxis=dict(gridcolor="#232b36", type="category"),
+        showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"가계부 시트 각 월 탭의 '고정지출' 셀 값을 그대로 가져온 최근 {len(recent)}개월 추이예요.")
 else:
-    st.info("소비관리 탭 데이터가 있어야 고정지출을 계산할 수 있어요. (아래 '소비관리' 섹션 참고)")
+    st.info(
+        "가계부 시트에서 '고정지출' 값을 찾지 못했어요. 각 월 탭에 '고정지출'이라는 라벨이 있는지, "
+        "혹은 F80 셀에 값이 있는지 확인해주세요. 디버그 모드를 켜면 로그에서 확인할 수 있어요."
+    )
 
 st.divider()
 
@@ -928,9 +916,17 @@ if tickers:
             mk_tickers = [t for t in tickers if t["market"] == mk and t.get("profit") is not None]
             top5 = sorted(mk_tickers, key=lambda t: t["profit"], reverse=True)[:5]
             if top5:
-                names = [t["name"] for t in reversed(top5)]
-                profits = [t["profit"] for t in reversed(top5)]
+                # 리스트 순서 그대로(1등이 맨 앞) 넣고, 축을 반전시켜서 1등이 위로 오게 함
+                # (수동으로 리스트를 뒤집으면 순서가 꼬이기 쉬워서, 축 반전이 더 안전합니다)
+                names = [t["name"] for t in top5]
+                profits = [t["profit"] for t in top5]
                 colors_top5 = ["#34d8b0" if p >= 0 else "#ff6b6b" for p in profits]
+
+                max_abs = max(abs(p) for p in profits)
+                min_p = min(0, min(profits))
+                max_p = max(profits)
+                pad = max_abs * 0.45  # 데이터 라벨이 잘리지 않도록 오른쪽에 여유 공간 확보
+
                 fig = go.Figure(
                     go.Bar(
                         x=profits, y=names, orientation="h",
@@ -946,12 +942,17 @@ if tickers:
                     height=60 + 42 * len(top5),
                     paper_bgcolor="#12171f", plot_bgcolor="#12171f",
                     font={"color": "#e8ecf1"},
-                    margin=dict(l=10, r=70, t=40, b=10),
-                    xaxis=dict(showticklabels=False, showgrid=False, zeroline=True, zerolinecolor="#8a94a6"),
-                    yaxis=dict(tickfont=dict(size=12)),
+                    margin=dict(l=10, r=90, t=40, b=10),
+                    xaxis=dict(
+                        showticklabels=False, showgrid=False, zeroline=True, zerolinecolor="#8a94a6",
+                        range=[min_p - pad * 0.15, max_p + pad],
+                    ),
+                    yaxis=dict(tickfont=dict(size=12), autorange="reversed"),  # 1등이 맨 위로
                     showlegend=False,
                 )
                 st.plotly_chart(fig, use_container_width=True)
+                if len(mk_tickers) < 5:
+                    st.caption(f"평가손익 값이 있는 {mk} 종목이 {len(mk_tickers)}개뿐이라 {len(top5)}개만 표시돼요.")
             else:
                 st.caption(f"{mk} 데이터 없음")
 else:
