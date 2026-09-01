@@ -597,7 +597,10 @@ for name, amount, note, annual_target in INVEST_ITEMS:
                     amount_val = int(digits) if digits else 0
                     ok = _save_invest_amount(item_key, amount_val)
                     if ok:
-                        st.session_state[text_key] = f"{amount_val:,}"
+                        # 이미 그려진 입력창의 값을 여기서 직접 바꾸면 Streamlit이 에러를 냄
+                        # (위젯이 그려진 뒤엔 그 키의 session_state를 못 건드림).
+                        # 대신 키를 지워두면, 다음 리런 때 위 초기화 로직이 새 값으로 다시 채워줌.
+                        st.session_state.pop(text_key, None)
                         st.toast(f"{name} 저장 완료: {amount_val:,}원", icon="✅")
                         st.rerun()
                     else:
